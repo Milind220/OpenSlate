@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "paths": {
+      "@openslate/core": ["./packages/core/src"],
+      "@openslate/models": ["./packages/models/src"],
+      "@openslate/server": ["./packages/server/src"],
+      "@openslate/tools": ["./packages/tools/src"],
+      "@openslate/tui": ["./packages/tui/src"],
+      "@openslate/sdk": ["./packages/sdk/src"],
+      "@openslate/plugins": ["./packages/plugins/src"]
+    }
+  },
+  "include": []
+}
