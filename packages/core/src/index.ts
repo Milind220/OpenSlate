@@ -63,6 +63,8 @@ export { createSessionStore } from "./storage/index.js";
 export type { SessionStore, CreateSessionInput } from "./storage/index.js";
 export { createMessageStore } from "./storage/index.js";
 export type { MessageStore, AppendMessageInput } from "./storage/index.js";
+export { createWorkerReturnStore } from "./storage/index.js";
+export type { WorkerReturnStore, CreateWorkerReturnInput } from "./storage/index.js";
 
 // ── Events ───────────────────────────────────────────────────────────
 
@@ -75,6 +77,12 @@ export type {
   AssistantStartedEvent,
   AssistantCompletedEvent,
   AssistantFailedEvent,
+  ThreadCreatedEvent,
+  ThreadReusedEvent,
+  ThreadStartedEvent,
+  ThreadCompletedEvent,
+  ThreadFailedEvent,
+  WorkerReturnCreatedEvent,
   OpenSlateEvent,
   OpenSlateEventType,
   EventListener,
@@ -95,5 +103,31 @@ export type {
 
 // ── Model Adapter ────────────────────────────────────────────────────
 
-export { createModelCallAdapter } from "./model-adapter.js";
-export type { CompleteFn } from "./model-adapter.js";
+export { createModelCallAdapter, createChildModelCallAdapter } from "./model-adapter.js";
+export type { CompleteFn, ChildCompleteFn } from "./model-adapter.js";
+
+// ── Child Runtime ────────────────────────────────────────────────────
+
+export { runChildLoop } from "./child-runtime.js";
+export type {
+  ChildToolCall,
+  ChildToolResult,
+  ChildModelCallInput,
+  ChildModelCallResult,
+  ChildModelCallFn,
+  ToolExecutorFn,
+  ChildRuntimeConfig,
+  ChildRuntimeDeps,
+  ChildRunResult,
+} from "./child-runtime.js";
+
+// ── Thread Service ───────────────────────────────────────────────────
+
+export { createThreadService } from "./thread-service.js";
+export type {
+  SpawnThreadInput,
+  SpawnThreadResult,
+  ThreadService,
+  ThreadServiceDeps,
+} from "./thread-service.js";
+
