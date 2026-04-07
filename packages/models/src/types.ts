@@ -1,12 +1,34 @@
 /**
- * Provider-portable model abstraction types.
+ * Provider-portable model abstraction types for OpenSlate.
+ *
+ * Follows the same pattern as opencode: uses the Vercel AI SDK (@ai-sdk/*) 
+ * as the core provider abstraction, with a thin layer on top for:
+ * - Role-based model routing (slots)
+ * - Provider configuration
+ * - Model metadata (capabilities, cost, limits)
+ * - Normalized model registry
  *
  * Design rules:
  * - Provider choice is orthogonal to session/orchestrator logic
  * - Role-based model routing is first-class
- * - Provider-specific quirks are normalized behind adapters
+ * - Provider-specific quirks are normalized behind AI SDK adapters
  * - Per-role model selection works across providers
  */
+
+import type { LanguageModelV3 } from "@ai-sdk/provider";
+
+// ── Branded Identifiers ──────────────────────────────────────────────
+
+export type ProviderId = string & { readonly __brand: "ProviderId" };
+export type ModelId = string & { readonly __brand: "ModelId" };
+
+export function makeProviderId(id: string): ProviderId {
+  return id as ProviderId;
+}
+
+export function makeModelId(id: string): ModelId {
+  return id as ModelId;
+}
 
 // ── Model Slots ──────────────────────────────────────────────────────
 
@@ -25,8 +47,8 @@ export type ModelSlot =
 
 /** Configuration for a single model slot. */
 export interface ModelSlotConfig {
-  provider: string;
-  model: string;
+  provider: ProviderId;
+  model: ModelId;
   /** Optional temperature override for this slot. */
   temperature?: number;
   /** Optional max tokens override for this slot. */
@@ -50,128 +72,139 @@ export interface ModelRouterConfig {
 
 /** Configuration for a single provider backend. */
 export interface ProviderConfig {
-  id: string;
-  kind: string;
-  baseUrl: string;
+  id: ProviderId;
+  /** 
+   * Provider kind determines which AI SDK package to use.
+   * Maps to npm packages like @ai-sdk/openai, @ai-sdk/anthropic, etc.
+   */
+  kind: "openai" | "anthropic" | "openai-compatible" | string;
+  /** API base URL. */
+  baseUrl?: string;
+  /** API key. Can also be set via environment variable. */
   apiKey?: string;
+  /** Environment variable name for the API key. */
+  apiKeyEnv?: string;
+  /** Extra headers to send with every request. */
   headers?: Record<string, string>;
-  /** Provider-specific options (e.g., organization ID). */
+  /** Provider-specific options passed to the AI SDK provider constructor. */
   options?: Record<string, unknown>;
 }
 
-// ── Normalized Request/Response ──────────────────────────────────────
+// ── Model Capabilities ───────────────────────────────────────────────
 
-export interface ModelMessage {
-  role: "user" | "assistant" | "system" | "tool";
-  content: string | ModelMessagePart[];
-  toolCallId?: string;
-  name?: string;
+export interface ModelCapabilities {
+  /** Whether the model supports temperature control. */
+  temperature: boolean;
+  /** Whether the model supports extended thinking / reasoning. */
+  reasoning: boolean;
+  /** Whether the model supports file/image attachments. */
+  attachment: boolean;
+  /** Whether the model supports tool calling. */
+  toolCall: boolean;
+  /** Input modalities. */
+  input: {
+    text: boolean;
+    audio: boolean;
+    image: boolean;
+    video: boolean;
+    pdf: boolean;
+  };
+  /** Output modalities. */
+  output: {
+    text: boolean;
+    audio: boolean;
+    image: boolean;
+    video: boolean;
+    pdf: boolean;
+  };
 }
 
-export type ModelMessagePart =
-  | { type: "text"; text: string }
-  | { type: "tool_call"; toolCallId: string; name: string; args: string }
-  | { type: "tool_result"; toolCallId: string; content: string; isError?: boolean };
+// ── Model Info ────────────────────────────────────────────────────────
 
-export interface ToolDefinitionParam {
-  name: string;
-  description: string;
-  parameters: Record<string, unknown>;
+/** Cost per million tokens in USD. */
+export interface ModelCost {
+  input: number;
+  output: number;
+  cache: {
+    read: number;
+    write: number;
+  };
 }
 
-/** Normalized model request — provider-agnostic. */
-export interface ModelRequest {
-  messages: ModelMessage[];
-  model: string;
-  temperature?: number;
-  maxTokens?: number;
-  tools?: ToolDefinitionParam[];
-  /** Request JSON mode / structured output. */
-  jsonMode?: boolean;
-  /** Request streaming. */
-  stream?: boolean;
-  /** Abort signal for cancellation. */
-  signal?: AbortSignal;
-}
-
-/** Normalized model response — provider-agnostic. */
-export interface ModelResponse {
-  content: string | null;
-  toolCalls: ModelToolCall[];
-  reasoning: string | null;
-  usage: ModelUsage;
-  finishReason: "stop" | "tool_calls" | "length" | "error";
-  /** Raw provider response for debugging. */
-  raw?: unknown;
-}
-
-export interface ModelToolCall {
-  id: string;
-  name: string;
-  args: string;
-}
-
-// ── Usage / Cost ─────────────────────────────────────────────────────
-
-export interface ModelUsage {
-  promptTokens: number;
-  completionTokens: number;
-  totalTokens: number;
-  /** Cost in USD, if calculable. */
-  costUsd?: number;
-}
-
-// ── Streaming ────────────────────────────────────────────────────────
-
-export type StreamEventKind =
-  | "text_delta"
-  | "reasoning_delta"
-  | "tool_call_start"
-  | "tool_call_delta"
-  | "tool_call_end"
-  | "done"
-  | "error";
-
-export interface StreamEvent {
-  kind: StreamEventKind;
-  /** Text content delta. */
-  delta?: string;
-  /** Tool call metadata for tool_call_start events. */
-  toolCall?: { id: string; name: string };
-  /** Final usage stats on done event. */
-  usage?: ModelUsage;
-  /** Error info on error event. */
-  error?: string;
-}
-
-// ── Provider Interface ───────────────────────────────────────────────
-
-/**
- * ModelProvider — raw provider call interface.
- * One per configured provider backend.
- */
-export interface ModelProvider {
-  readonly id: string;
-  readonly kind: string;
-
-  /** Make a non-streaming completion call. */
-  complete(request: ModelRequest): Promise<ModelResponse>;
-
-  /** Make a streaming completion call. */
-  stream(request: ModelRequest): AsyncIterable<StreamEvent>;
+export interface ModelLimits {
+  /** Maximum context window in tokens. */
+  context: number;
+  /** Maximum input tokens (if different from context). */
+  input?: number;
+  /** Maximum output tokens. */
+  output: number;
 }
 
 /**
- * ModelAdapter — normalizes provider quirks.
- * Wraps a ModelProvider to handle tool call format differences,
- * streaming event normalization, usage accounting, etc.
+ * Full model metadata.
+ * Follows the same shape as opencode's Provider.Model, adapted for OpenSlate.
  */
-export interface ModelAdapter {
-  readonly providerId: string;
-
-  /** Normalized completion call. */
-  complete(request: ModelRequest): Promise<ModelResponse>;
-
-  /** Normalized streaming call. */
-  stream(request: ModelRequest): AsyncIterable<StreamEvent>;
+export interface ModelInfo {
+  id: ModelId;
+  providerId: ProviderId;
+  /** Display name. */
+  name: string;
+  /** Model family (e.g., "claude", "gpt"). */
+  family?: string;
+  /** The actual model ID to send to the API (may differ from our ID). */
+  apiId: string;
+  /** npm package for the AI SDK provider. */
+  npm: string;
+  /** API endpoint URL. */
+  apiUrl?: string;
+  /** Model status. */
+  status: "active" | "beta" | "deprecated";
+  /** Capabilities. */
+  capabilities: ModelCapabilities;
+  /** Cost per million tokens. */
+  cost: ModelCost;
+  /** Token limits. */
+  limits: ModelLimits;
+  /** Extra headers for this specific model. */
+  headers?: Record<string, string>;
+  /** Provider-specific model options. */
+  options?: Record<string, unknown>;
 }
+
+// ── Provider Info ────────────────────────────────────────────────────
+
+/**
+ * A resolved provider with its available models.
+ */
+export interface ProviderInfo {
+  id: ProviderId;
+  name: string;
+  /** How this provider was discovered. */
+  source: "env" | "config" | "builtin";
+  /** Environment variable names that can provide the API key. */
+  env: string[];
+  /** Resolved API key (if available). */
+  apiKey?: string;
+  /** Provider-level options. */
+  options: Record<string, unknown>;
+  /** Available models for this provider. */
+  models: Record<string, ModelInfo>;
+}
+
+// ── Resolved Model ───────────────────────────────────────────────────
+
+/**
+ * A fully resolved model ready to use with the AI SDK.
+ * Contains both the metadata and the actual AI SDK language model instance.
+ */
+export interface ResolvedModel {
+  info: ModelInfo;
+  provider: ProviderInfo;
+  language: LanguageModelV3;
+}
+
+// ── Stream Events (pass-through from AI SDK) ─────────────────────────
+
+// We re-export the AI SDK's streaming types rather than defining our own.
+// This keeps us aligned with the ecosystem.
+export type { LanguageModelV3 } from "@ai-sdk/provider";

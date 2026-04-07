@@ -13,7 +13,14 @@
     "clean": "rm -rf dist .turbo"
   },
   "dependencies": {
-    "@openslate/core": "workspace:*"
+    "@ai-sdk/anthropic": "^3.0.67",
+    "@ai-sdk/openai": "^3.0.51",
+    "@ai-sdk/openai-compatible": "^2.0.40",
+    "@ai-sdk/provider": "^3.0.8",
+    "@ai-sdk/provider-utils": "^4.0.23",
+    "@openslate/core": "workspace:*",
+    "ai": "^6.0.149",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "typescript": "^5.8.3",
