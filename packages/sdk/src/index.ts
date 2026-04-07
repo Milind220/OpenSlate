@@ -1,8 +1,12 @@
 /**
  * @openslate/sdk
  *
- * Typed client for the OpenSlate local control plane API.
- * Placeholder — real client implementation comes in a later phase.
+ * Typed client for the OpenSlate local control-plane API.
  */
 
-export type { OpenSlateClientConfig, OpenSlateClient } from "./client.js";
+export { createClient } from "./client.js";
+export type {
+  OpenSlateClientConfig,
+  OpenSlateClient,
+  SendMessageResponse,
+} from "./client.js";
