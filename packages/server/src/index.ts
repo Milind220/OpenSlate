@@ -6,4 +6,7 @@
  */
 
 export { createServer } from "./server.js";
-export type { ServerConfig } from "./server.js";
+export type { ServerConfig, ServerDeps, OpenSlateServer } from "./server.js";
+
+export { bootstrap } from "./bootstrap.js";
+export type { BootstrapConfig } from "./bootstrap.js";
