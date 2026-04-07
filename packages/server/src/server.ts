@@ -1,13 +1,13 @@
 /**
  * Local control-plane server for OpenSlate.
  *
- * Real HTTP server using Bun.serve() with routes for session/message
- * management, model turn execution, and SSE event streaming.
+ * Phase 4: adds thread routes, children listing, and worker-return routes.
  */
 
 import type { SessionId } from "@openslate/core";
 import type {
   SessionService,
+  ThreadService,
   EventBus,
   OpenSlateEvent,
 } from "@openslate/core";
@@ -21,6 +21,7 @@ export interface ServerConfig {
 
 export interface ServerDeps {
   sessionService: SessionService;
+  threadService: ThreadService;
   events: EventBus;
 }
 
@@ -47,7 +48,7 @@ function errorResponse(message: string, status = 400): Response {
 // ── Server ───────────────────────────────────────────────────────────
 
 export function createServer(config: ServerConfig, deps: ServerDeps): OpenSlateServer {
-  const { sessionService, events } = deps;
+  const { sessionService, threadService, events } = deps;
   let server: ReturnType<typeof Bun.serve> | null = null;
 
   async function handleRequest(req: Request): Promise<Response> {
@@ -107,6 +108,59 @@ export function createServer(config: ServerConfig, deps: ServerDeps): OpenSlateS
         }, 201);
       }
 
+      // ── Thread Routes ────────────────────────────────────────────
+
+      // POST /sessions/:id/threads — spawn or reuse a child thread
+      const threadsPostMatch = path.match(/^\/sessions\/([^\/]+)\/threads$/);
+      if (method === "POST" && threadsPostMatch) {
+        const parentSessionId = threadsPostMatch[1] as SessionId;
+        const body = await req.json() as Record<string, unknown>;
+        const task = body.task;
+        if (typeof task !== "string" || !task.trim()) {
+          return errorResponse("Missing or empty 'task' field");
+        }
+        const alias = typeof body.alias === "string" ? body.alias : undefined;
+        const capabilities = Array.isArray(body.capabilities) ? body.capabilities as string[] : undefined;
+
+        const result = await threadService.spawnAndRun({
+          parentSessionId,
+          task,
+          alias,
+          capabilities,
+        });
+
+        return json({
+          childSession: result.childSession,
+          workerReturn: result.workerReturn,
+          reused: result.reused,
+        }, 201);
+      }
+
+      // GET /sessions/:id/children — list child sessions
+      const childrenMatch = path.match(/^\/sessions\/([^\/]+)\/children$/);
+      if (method === "GET" && childrenMatch) {
+        const parentSessionId = childrenMatch[1] as SessionId;
+        const children = threadService.listChildren(parentSessionId);
+        return json(children);
+      }
+
+      // GET /sessions/:id/worker-returns — list worker returns for parent
+      const workerReturnsMatch = path.match(/^\/sessions\/([^\/]+)\/worker-returns$/);
+      if (method === "GET" && workerReturnsMatch) {
+        const parentSessionId = workerReturnsMatch[1] as SessionId;
+        const returns = threadService.listWorkerReturns(parentSessionId);
+        return json(returns);
+      }
+
+      // GET /worker-returns/:id — get specific worker return
+      const workerReturnMatch = path.match(/^\/worker-returns\/([^\/]+)$/);
+      if (method === "GET" && workerReturnMatch) {
+        const id = workerReturnMatch[1]!;
+        const wr = threadService.getWorkerReturn(id);
+        if (!wr) return errorResponse("WorkerReturn not found", 404);
+        return json(wr);
+      }
+
       // GET /events (SSE)
       if (method === "GET" && path === "/events") {
         return handleSSE(events);
@@ -129,7 +183,7 @@ export function createServer(config: ServerConfig, deps: ServerDeps): OpenSlateS
 
         unsubscribe = events.on((event: OpenSlateEvent) => {
           try {
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+            controller.enqueue(encoder.encode("data: " + JSON.stringify(event) + "\n\n"));
           } catch {
             // Stream closed
           }
@@ -163,7 +217,7 @@ export function createServer(config: ServerConfig, deps: ServerDeps): OpenSlateS
         fetch: handleRequest,
       });
       config.port = server.port ?? config.port;
-      console.log(`[openslate] server listening on ${server.hostname}:${server.port}`);
+      console.log("[openslate] server listening on " + server.hostname + ":" + server.port);
     },
 
     async stop(): Promise<void> {

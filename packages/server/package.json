@@ -14,7 +14,9 @@
   },
   "dependencies": {
     "@openslate/core": "workspace:*",
-    "@openslate/models": "workspace:*"
+    "@openslate/models": "workspace:*",
+    "@openslate/tools": "workspace:*",
+    "ai": "^6.0.149"
   },
   "devDependencies": {
     "typescript": "^5.8.3",
