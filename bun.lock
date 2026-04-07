@@ -63,6 +63,8 @@
       "dependencies": {
         "@openslate/core": "workspace:*",
         "@openslate/models": "workspace:*",
+        "@openslate/tools": "workspace:*",
+        "ai": "^6.0.149",
       },
       "devDependencies": {
         "@types/bun": "^1.2.0",
