@@ -1,15 +1,15 @@
 /**
  * OpenSlate SDK client — typed HTTP client for the local control plane.
+ * Phase 4: adds thread, children, and worker-return methods.
  */
 
-import type { Session, SessionId, Message } from "@openslate/core";
+import type { Session, SessionId, Message, WorkerReturn } from "@openslate/core";
 import type { OpenSlateEvent } from "@openslate/core";
 
 // ── Config ───────────────────────────────────────────────────────────
 
 export interface OpenSlateClientConfig {
   baseUrl: string;
-  /** Optional auth token for the local server. */
   token?: string;
 }
 
@@ -25,27 +25,39 @@ export interface SendMessageResponse {
   } | null;
 }
 
+export interface SpawnThreadResponse {
+  childSession: Session;
+  workerReturn: WorkerReturn;
+  reused: boolean;
+}
+
 // ── Client Interface ─────────────────────────────────────────────────
 
 export interface OpenSlateClient {
   readonly config: OpenSlateClientConfig;
 
-  /** Health check. */
   health(): Promise<{ ok: boolean; timestamp: string }>;
-
-  /** Create a new session. */
   createSession(options?: { title?: string; projectId?: string }): Promise<Session>;
-
-  /** Get a single session. */
   getSession(id: SessionId): Promise<Session>;
-
-  /** Get messages for a session. */
   getMessages(sessionId: SessionId): Promise<Message[]>;
-
-  /** Send a message and get the assistant response. */
   sendMessage(sessionId: SessionId, content: string): Promise<SendMessageResponse>;
 
-  /** Subscribe to SSE event stream. Returns an async iterable. */
+  /** Spawn or reuse a child thread. */
+  spawnThread(parentSessionId: SessionId, options: {
+    task: string;
+    alias?: string;
+    capabilities?: string[];
+  }): Promise<SpawnThreadResponse>;
+
+  /** List child sessions for a parent. */
+  listChildren(parentSessionId: SessionId): Promise<Session[]>;
+
+  /** List worker returns for a parent. */
+  listWorkerReturns(parentSessionId: SessionId): Promise<WorkerReturn[]>;
+
+  /** Get a specific worker return. */
+  getWorkerReturn(id: string): Promise<WorkerReturn>;
+
   subscribe(): AsyncIterable<OpenSlateEvent>;
 }
 
@@ -56,18 +68,18 @@ export function createClient(config: OpenSlateClientConfig): OpenSlateClient {
 
   function headers(): Record<string, string> {
     const h: Record<string, string> = { "Content-Type": "application/json" };
-    if (config.token) h["Authorization"] = `Bearer ${config.token}`;
+    if (config.token) h["Authorization"] = "Bearer " + config.token;
     return h;
   }
 
   async function request<T>(path: string, init?: RequestInit): Promise<T> {
-    const res = await fetch(`${base}${path}`, {
+    const res = await fetch(base + path, {
       ...init,
       headers: { ...headers(), ...init?.headers },
     });
     if (!res.ok) {
       const body = await res.text();
-      throw new Error(`HTTP ${res.status}: ${body}`);
+      throw new Error("HTTP " + res.status + ": " + body);
     }
     return res.json() as Promise<T>;
   }
@@ -87,24 +99,41 @@ export function createClient(config: OpenSlateClientConfig): OpenSlateClient {
     },
 
     getSession(id) {
-      return request(`/sessions/${id}`);
+      return request("/sessions/" + id);
     },
 
     getMessages(sessionId) {
-      return request(`/sessions/${sessionId}/messages`);
+      return request("/sessions/" + sessionId + "/messages");
     },
 
     sendMessage(sessionId, content) {
-      return request(`/sessions/${sessionId}/messages`, {
+      return request("/sessions/" + sessionId + "/messages", {
         method: "POST",
         body: JSON.stringify({ content }),
       });
     },
 
-    async *subscribe(): AsyncGenerator<OpenSlateEvent> {
-      const res = await fetch(`${base}/events`, {
-        headers: headers(),
+    spawnThread(parentSessionId, options) {
+      return request("/sessions/" + parentSessionId + "/threads", {
+        method: "POST",
+        body: JSON.stringify(options),
       });
+    },
+
+    listChildren(parentSessionId) {
+      return request("/sessions/" + parentSessionId + "/children");
+    },
+
+    listWorkerReturns(parentSessionId) {
+      return request("/sessions/" + parentSessionId + "/worker-returns");
+    },
+
+    getWorkerReturn(id) {
+      return request("/worker-returns/" + id);
+    },
+
+    async *subscribe(): AsyncGenerator<OpenSlateEvent> {
+      const res = await fetch(base + "/events", { headers: headers() });
       if (!res.ok || !res.body) {
         throw new Error("Failed to connect to event stream");
       }
