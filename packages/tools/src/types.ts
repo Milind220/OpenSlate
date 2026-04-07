@@ -1,36 +1,59 @@
 /**
- * Tool runtime types.
+ * Tool runtime types for OpenSlate.
  *
- * Each tool has a typed schema, produces persisted results,
- * and respects permission gates.
- * Placeholder — tool implementations come in a later phase.
+ * Each tool has typed input/output, a capability tag for permission gating,
+ * and produces structured results.
  */
 
-/** Definition of a single tool available to the runtime. */
+// ── Capabilities ─────────────────────────────────────────────────────
+
+export type ToolCapability = "read" | "write" | "search" | "shell";
+
+// ── Tool Definition ──────────────────────────────────────────────────
+
 export interface ToolDefinition {
   name: string;
   description: string;
   /** JSON Schema for tool parameters. */
   parameters: Record<string, unknown>;
-  /** Whether this tool requires explicit approval. */
-  requiresApproval: boolean;
   /** Capability category for permission scoping. */
-  capability: string;
+  capability: ToolCapability;
 }
 
-/** Result of a tool execution. */
+// ── Tool Execution ───────────────────────────────────────────────────
+
 export interface ToolResult {
   toolCallId: string;
+  toolName: string;
   content: string;
   isError: boolean;
-  /** Duration in milliseconds. */
   durationMs: number;
 }
 
-/** Permission policy for a tool or capability. */
-export type ToolPermissionPolicy = "allow" | "deny" | "ask";
+export interface ToolCall {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+}
 
-export interface ToolPermission {
-  tool: string;
-  policy: ToolPermissionPolicy;
+// ── Tool Registry ────────────────────────────────────────────────────
+
+export interface ToolExecutor {
+  (args: Record<string, unknown>): Promise<string>;
+}
+
+export interface RegisteredTool {
+  definition: ToolDefinition;
+  execute: ToolExecutor;
+}
+
+export interface ToolRegistry {
+  register(tool: RegisteredTool): void;
+  get(name: string): RegisteredTool | undefined;
+  list(): RegisteredTool[];
+  listForCapabilities(capabilities: ToolCapability[]): RegisteredTool[];
+  /** Get AI SDK-compatible tool definitions for a set of capabilities. */
+  getToolSet(capabilities: ToolCapability[]): Record<string, { description: string; parameters: Record<string, unknown> }>;
+  /** Execute a tool call with permission checking. */
+  execute(call: ToolCall, allowedCapabilities: ToolCapability[]): Promise<ToolResult>;
 }
