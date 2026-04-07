@@ -147,6 +147,13 @@ export namespace ProviderTransform {
    * Returns the max output tokens for a model, capped at a sensible default.
    */
   export function maxOutputTokens(model: ModelInfo): number {
+    // Fireworks rejects non-streamed requests with max_tokens > 4096.
+    // Phase 3 uses non-streamed complete() calls for the primary slot,
+    // so cap this provider to a safe limit here.
+    if (model.providerId === "fireworks") {
+      return Math.min(model.limits.output, 4_096);
+    }
+
     return Math.min(model.limits.output, DEFAULT_MAX_OUTPUT_TOKENS) || DEFAULT_MAX_OUTPUT_TOKENS;
   }
 
