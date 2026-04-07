@@ -17,7 +17,7 @@ export type ArtifactId = string & { readonly __brand: "ArtifactId" };
 // ── Session ──────────────────────────────────────────────────────────
 
 export type SessionKind = "primary" | "thread" | "query";
-export type SessionStatus = "active" | "paused" | "completed" | "aborted";
+export type SessionStatus = "active" | "paused" | "completed" | "aborted" | "failed" | "blocked";
 
 export interface Session {
   id: SessionId;
