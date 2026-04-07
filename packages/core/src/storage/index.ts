@@ -7,3 +7,5 @@ export { createSessionStore } from "./session-store.js";
 export type { SessionStore, CreateSessionInput } from "./session-store.js";
 export { createMessageStore } from "./message-store.js";
 export type { MessageStore, AppendMessageInput } from "./message-store.js";
+export { createWorkerReturnStore } from "./worker-return-store.js";
+export type { WorkerReturnStore, CreateWorkerReturnInput } from "./worker-return-store.js";

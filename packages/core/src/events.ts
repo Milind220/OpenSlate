@@ -1,8 +1,7 @@
 /**
  * Runtime event bus for OpenSlate.
  *
- * Simple typed EventEmitter for session/message lifecycle events.
- * Later phases will extend this with thread, reintegration, and compaction events.
+ * Typed EventEmitter for session, message, thread, and worker-return lifecycle events.
  */
 
 // ── Event Types ──────────────────────────────────────────────────────
@@ -43,13 +42,53 @@ export interface AssistantFailedEvent extends RuntimeEvent {
   payload: { sessionId: string; messageId: string; error: string };
 }
 
+// ── Thread Events ────────────────────────────────────────────────────
+
+export interface ThreadCreatedEvent extends RuntimeEvent {
+  type: "thread.created";
+  payload: { parentSessionId: string; childSessionId: string; alias: string | null; task: string };
+}
+
+export interface ThreadReusedEvent extends RuntimeEvent {
+  type: "thread.reused";
+  payload: { parentSessionId: string; childSessionId: string; alias: string; task: string };
+}
+
+export interface ThreadStartedEvent extends RuntimeEvent {
+  type: "thread.started";
+  payload: { childSessionId: string; task: string };
+}
+
+export interface ThreadCompletedEvent extends RuntimeEvent {
+  type: "thread.completed";
+  payload: { childSessionId: string; workerReturnId: string };
+}
+
+export interface ThreadFailedEvent extends RuntimeEvent {
+  type: "thread.failed";
+  payload: { childSessionId: string; error: string };
+}
+
+export interface WorkerReturnCreatedEvent extends RuntimeEvent {
+  type: "worker_return.created";
+  payload: { workerReturnId: string; parentSessionId: string; childSessionId: string; status: string };
+}
+
+// ── Union ────────────────────────────────────────────────────────────
+
 export type OpenSlateEvent =
   | SessionCreatedEvent
   | SessionUpdatedEvent
   | MessageCreatedEvent
   | AssistantStartedEvent
   | AssistantCompletedEvent
-  | AssistantFailedEvent;
+  | AssistantFailedEvent
+  | ThreadCreatedEvent
+  | ThreadReusedEvent
+  | ThreadStartedEvent
+  | ThreadCompletedEvent
+  | ThreadFailedEvent
+  | WorkerReturnCreatedEvent;
 
 export type OpenSlateEventType = OpenSlateEvent["type"];
 
@@ -88,6 +127,7 @@ function makeEvent<T extends OpenSlateEvent>(type: T["type"], payload: T["payloa
 }
 
 export const RuntimeEvents = {
+  // Session events
   sessionCreated(sessionId: string): SessionCreatedEvent {
     return makeEvent<SessionCreatedEvent>("session.created", { sessionId });
   },
@@ -105,5 +145,25 @@ export const RuntimeEvents = {
   },
   assistantFailed(sessionId: string, messageId: string, error: string): AssistantFailedEvent {
     return makeEvent<AssistantFailedEvent>("assistant.failed", { sessionId, messageId, error });
+  },
+
+  // Thread events
+  threadCreated(parentSessionId: string, childSessionId: string, alias: string | null, task: string): ThreadCreatedEvent {
+    return makeEvent<ThreadCreatedEvent>("thread.created", { parentSessionId, childSessionId, alias, task });
+  },
+  threadReused(parentSessionId: string, childSessionId: string, alias: string, task: string): ThreadReusedEvent {
+    return makeEvent<ThreadReusedEvent>("thread.reused", { parentSessionId, childSessionId, alias, task });
+  },
+  threadStarted(childSessionId: string, task: string): ThreadStartedEvent {
+    return makeEvent<ThreadStartedEvent>("thread.started", { childSessionId, task });
+  },
+  threadCompleted(childSessionId: string, workerReturnId: string): ThreadCompletedEvent {
+    return makeEvent<ThreadCompletedEvent>("thread.completed", { childSessionId, workerReturnId });
+  },
+  threadFailed(childSessionId: string, error: string): ThreadFailedEvent {
+    return makeEvent<ThreadFailedEvent>("thread.failed", { childSessionId, error });
+  },
+  workerReturnCreated(workerReturnId: string, parentSessionId: string, childSessionId: string, status: string): WorkerReturnCreatedEvent {
+    return makeEvent<WorkerReturnCreatedEvent>("worker_return.created", { workerReturnId, parentSessionId, childSessionId, status });
   },
 };

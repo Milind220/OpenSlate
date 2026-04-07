@@ -18,11 +18,9 @@ export function initDatabase(dbPath: string = DEFAULT_DB_PATH): Database {
   mkdirSync(dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
 
-  // Enable WAL mode for better concurrent read performance
   db.run("PRAGMA journal_mode = WAL");
   db.run("PRAGMA foreign_keys = ON");
 
-  // Create tables
   db.run(`
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY,
@@ -32,6 +30,8 @@ export function initDatabase(dbPath: string = DEFAULT_DB_PATH): Database {
       parent_id TEXT,
       alias TEXT,
       title TEXT NOT NULL DEFAULT '',
+      task TEXT,
+      capabilities_json TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY (parent_id) REFERENCES sessions(id)
@@ -73,10 +73,37 @@ export function initDatabase(dbPath: string = DEFAULT_DB_PATH): Database {
     )
   `);
 
-  // Indexes for common queries
+  db.run(`
+    CREATE TABLE IF NOT EXISTS worker_returns (
+      id TEXT PRIMARY KEY,
+      parent_session_id TEXT NOT NULL,
+      child_session_id TEXT NOT NULL,
+      child_type TEXT NOT NULL DEFAULT 'thread',
+      alias TEXT,
+      task TEXT NOT NULL,
+      status TEXT NOT NULL,
+      output TEXT,
+      trace_ref TEXT,
+      artifact_refs_json TEXT NOT NULL DEFAULT '[]',
+      started_at TEXT NOT NULL,
+      finished_at TEXT,
+      FOREIGN KEY (parent_session_id) REFERENCES sessions(id),
+      FOREIGN KEY (child_session_id) REFERENCES sessions(id)
+    )
+  `);
+
+  // Indexes
   db.run("CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at)");
   db.run("CREATE INDEX IF NOT EXISTS idx_message_parts_message ON message_parts(message_id, position)");
   db.run("CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_id)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_sessions_alias ON sessions(parent_id, alias)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_worker_returns_parent ON worker_returns(parent_session_id)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_worker_returns_child ON worker_returns(child_session_id)");
+
+  // Migration: add columns if they don't exist (for existing DBs from Phase 3)
+  try { db.run("ALTER TABLE sessions ADD COLUMN task TEXT"); } catch {}
+  try { db.run("ALTER TABLE sessions ADD COLUMN capabilities_json TEXT"); } catch {}
 
   return db;
 }
