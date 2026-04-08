@@ -165,8 +165,9 @@ main().catch((err) => {
   console.error("Fatal:", err);
   process.exit(1);
 });
-  if (process.env.OPENSLATE_PRIMARY_PROVIDER || process.env.OPENSLATE_PRIMARY_MODEL) {
-    console.log(
-      `Model override: ${process.env.OPENSLATE_PRIMARY_PROVIDER ?? "<unset>"} / ${process.env.OPENSLATE_PRIMARY_MODEL ?? "<unset>"}`
-    );
-  }
+
+if (process.env.OPENSLATE_PRIMARY_PROVIDER || process.env.OPENSLATE_PRIMARY_MODEL) {
+  console.log(
+    `Model override: ${process.env.OPENSLATE_PRIMARY_PROVIDER ?? "<unset>"} / ${process.env.OPENSLATE_PRIMARY_MODEL ?? "<unset>"}`
+  );
+}

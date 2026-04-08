@@ -110,15 +110,11 @@ export async function bootstrap(config: BootstrapConfig = {}) {
       tools: Object.keys(aiTools).length > 0 ? aiTools : undefined,
     });
 
-    return {
-      text: result.text ?? "",
-      toolCalls: (result.toolCalls ?? []).map((tc: any) => ({
-        toolCallId: tc.toolCallId,
-        toolName: tc.toolName,
-        args: tc.args,
-      })),
-      finishReason: result.finishReason ?? "stop",
-    };
+      return {
+        text: result.text ?? "",
+        toolCalls: normalizeRouterToolCalls(result.toolCalls ?? []),
+        finishReason: result.finishReason ?? "stop",
+      };
   });
 
   // 7. Create session service (parent)
@@ -190,15 +186,47 @@ function normalizeReasoning(value: unknown): string | undefined {
 /**
  * Build AI SDK compatible messages from our internal format.
  */
-function buildAIMessages(messages: Array<{ role: string; content: string; toolCallId?: string; toolCalls?: ChildToolCall[] }>): any[] {
+export function normalizeRouterToolCalls(
+  toolCalls: Array<{ toolCallId: string; toolName: string; args?: unknown; input?: unknown }>,
+): Array<{ toolCallId: string; toolName: string; args: Record<string, unknown> }> {
+  return toolCalls.map((tc) => ({
+    toolCallId: tc.toolCallId,
+    toolName: tc.toolName,
+    args: asRecord(tc.args) ?? asRecord(tc.input) ?? {},
+  }));
+}
+
+export function buildAIMessages(messages: Array<{
+  role: string;
+  content: string;
+  toolCallId?: string;
+  toolName?: string;
+  isError?: boolean;
+  toolCalls?: ChildToolCall[];
+}>): any[] {
+  const toolCallInputs = new Map<string, { toolName: string; input: Record<string, unknown> }>();
+
   return messages.map((msg) => {
     if (msg.role === "tool") {
+      const priorCall = msg.toolCallId ? toolCallInputs.get(msg.toolCallId) : undefined;
       return {
         role: "tool",
-        content: [{ type: "tool-result", toolCallId: msg.toolCallId, result: msg.content }],
+        content: [{
+          type: "tool-result",
+          toolCallId: msg.toolCallId,
+          toolName: msg.toolName ?? priorCall?.toolName ?? "unknown_tool",
+          input: priorCall?.input ?? {},
+          output: msg.isError
+            ? { type: "error-text", value: msg.content }
+            : { type: "text", value: msg.content },
+        }],
       };
     }
     if (msg.role === "assistant" && msg.toolCalls && msg.toolCalls.length > 0) {
+      for (const tc of msg.toolCalls) {
+        toolCallInputs.set(tc.id, { toolName: tc.name, input: tc.args });
+      }
+
       return {
         role: "assistant",
         content: [
@@ -207,7 +235,7 @@ function buildAIMessages(messages: Array<{ role: string; content: string; toolCa
             type: "tool-call",
             toolCallId: tc.id,
             toolName: tc.name,
-            args: tc.args,
+            input: tc.args,
           })),
         ],
       };
@@ -244,4 +272,10 @@ function buildDefaultRouterConfig(): ModelRouterConfig {
   }
 
   return { primary, execute: primary, explore: primary, search: primary, compress: primary };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
 }

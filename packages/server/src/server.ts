@@ -181,10 +181,13 @@ export function createServer(config: ServerConfig, deps: ServerDeps): OpenSlateS
 
   function handleSSE(events: EventBus): Response {
     let unsubscribe: (() => void) | null = null;
+    let heartbeat: ReturnType<typeof setInterval> | null = null;
 
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         const encoder = new TextEncoder();
+
+        controller.enqueue(encoder.encode(": connected\n\n"));
 
         unsubscribe = events.on((event: OpenSlateEvent) => {
           try {
@@ -193,9 +196,22 @@ export function createServer(config: ServerConfig, deps: ServerDeps): OpenSlateS
             // Stream closed
           }
         });
+
+        heartbeat = setInterval(() => {
+          try {
+            controller.enqueue(encoder.encode(": keepalive\n\n"));
+          } catch {
+            heartbeat && clearInterval(heartbeat);
+            heartbeat = null;
+          }
+        }, 5000);
       },
       cancel() {
         unsubscribe?.();
+        if (heartbeat) {
+          clearInterval(heartbeat);
+          heartbeat = null;
+        }
       },
     });
 
@@ -219,6 +235,7 @@ export function createServer(config: ServerConfig, deps: ServerDeps): OpenSlateS
       server = Bun.serve({
         port: config.port,
         hostname: config.host ?? "localhost",
+        idleTimeout: 0,
         fetch: handleRequest,
       });
       config.port = server.port ?? config.port;
