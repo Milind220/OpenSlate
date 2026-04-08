@@ -9,7 +9,11 @@
 
 import type { MessagePart, TextPart, ReasoningPart } from "./types/message.js";
 import type { ModelCallFn, ModelCallResult } from "./session-service.js";
-import type { ChildModelCallFn, ChildModelCallResult, ChildToolCall } from "./child-runtime.js";
+import type {
+  ChildModelCallFn,
+  ChildModelCallResult,
+  ChildToolCall,
+} from "./child-runtime.js";
 
 /**
  * Adapt a ModelRouter.complete call into a ModelCallFn (parent/chat mode).
@@ -39,7 +43,10 @@ export function createModelCallAdapter(completeFn: CompleteFn): ModelCallFn {
     const parts: MessagePart[] = [];
 
     if (result.reasoning) {
-      parts.push({ kind: "reasoning", content: result.reasoning } satisfies ReasoningPart);
+      parts.push({
+        kind: "reasoning",
+        content: result.reasoning,
+      } satisfies ReasoningPart);
     }
 
     if (result.text) {
@@ -65,17 +72,37 @@ export function createModelCallAdapter(completeFn: CompleteFn): ModelCallFn {
  */
 export interface ChildCompleteFn {
   (options: {
-    messages: Array<{ role: string; content: string; toolCallId?: string; toolCalls?: ChildToolCall[] }>;
+    messages: Array<{
+      role: string;
+      content: string;
+      toolCallId?: string;
+      toolCalls?: ChildToolCall[];
+    }>;
     system?: string;
-    tools?: Record<string, { description: string; parameters: Record<string, unknown> }>;
+    tools?: Record<
+      string,
+      { description: string; parameters: Record<string, unknown> }
+    >;
   }): Promise<{
     text: string;
-    toolCalls: Array<{ toolCallId: string; toolName: string; args: Record<string, unknown> }>;
+    toolCalls: Array<{
+      toolCallId: string;
+      toolName: string;
+      args: Record<string, unknown>;
+    }>;
     finishReason: string;
+    usage?: {
+      promptTokens: number;
+      completionTokens: number;
+      totalTokens: number;
+    };
+    model?: string;
+    estimatedCostUsd?: number | null;
   }>;
 }
-
-export function createChildModelCallAdapter(completeFn: ChildCompleteFn): ChildModelCallFn {
+export function createChildModelCallAdapter(
+  completeFn: ChildCompleteFn,
+): ChildModelCallFn {
   return async (input): Promise<ChildModelCallResult> => {
     const result = await completeFn({
       messages: input.messages,
@@ -91,17 +118,30 @@ export function createChildModelCallAdapter(completeFn: ChildCompleteFn): ChildM
 
     let finishReason: ChildModelCallResult["finishReason"];
     switch (result.finishReason) {
-      case "stop": finishReason = "stop"; break;
-      case "tool-calls": finishReason = "tool-calls"; break;
-      case "length": finishReason = "length"; break;
-      case "error": finishReason = "error"; break;
-      default: finishReason = "unknown"; break;
+      case "stop":
+        finishReason = "stop";
+        break;
+      case "tool-calls":
+        finishReason = "tool-calls";
+        break;
+      case "length":
+        finishReason = "length";
+        break;
+      case "error":
+        finishReason = "error";
+        break;
+      default:
+        finishReason = "unknown";
+        break;
     }
 
     return {
       text: result.text ?? "",
       toolCalls,
       finishReason,
+      usage: result.usage,
+      model: result.model,
+      estimatedCostUsd: result.estimatedCostUsd ?? null,
     };
   };
 }
