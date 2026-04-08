@@ -2,7 +2,9 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "paths": {
-      "@openslate/core": ["../core/src"]
+      "@openslate/core": ["../core/src"],
+      "@openslate/sdk": ["../sdk/src"],
+      "@openslate/server": ["../server/src"]
     }
   },
   "include": ["src"]

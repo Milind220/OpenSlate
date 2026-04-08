@@ -7,13 +7,16 @@
     ".": "./src/index.ts"
   },
   "scripts": {
+    "dev": "bun run ./src/main.ts",
     "build": "bun build ./src/index.ts --outdir dist --target bun",
     "typecheck": "tsc --noEmit",
     "test": "echo 'No tests yet for @openslate/tui'",
     "clean": "rm -rf dist .turbo"
   },
   "dependencies": {
-    "@openslate/core": "workspace:*"
+    "@openslate/core": "workspace:*",
+    "@openslate/sdk": "workspace:*",
+    "@openslate/server": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.8.3",
