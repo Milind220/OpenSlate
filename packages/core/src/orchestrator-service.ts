@@ -1,51 +1,77 @@
 /**
- * OrchestratorService — the central orchestrator for automatic delegation.
- *
- * Wraps the parent model call + thread service to enable the parent to
- * automatically delegate work to child threads when appropriate.
- *
- * The orchestrator uses a two-phase approach:
- * Phase 1: Ask the parent model to respond. The model can either:
- *   a) Respond directly with text (no delegation needed)
- *   b) Include delegation blocks in its response (structured JSON fenced blocks)
- * Phase 2: If delegations were requested, spawn/reuse threads, collect results,
- *          then ask the parent model to synthesize a final response.
+ * OrchestratorService — central orchestrator for automatic delegation.
  */
 
-import type { Session, SessionId, Message, MessagePart, TextPart } from "./types/index.js";
+import type {
+  Session,
+  SessionId,
+  Message,
+  MessagePart,
+  TextPart,
+} from "./types/index.js";
 import type { SessionStore } from "./storage/session-store.js";
 import type { MessageStore } from "./storage/message-store.js";
 import type { EventBus } from "./events.js";
 import { RuntimeEvents } from "./events.js";
-import type { ModelCallFn, ModelCallInput, ModelCallResult } from "./session-service.js";
-import type { ThreadService, SpawnThreadInput, SpawnThreadResult } from "./thread-service.js";
+import type {
+  ModelCallFn,
+  ModelCallInput,
+  ModelCallResult,
+} from "./session-service.js";
+import type {
+  ThreadService,
+  SpawnThreadInput,
+  SpawnThreadResult,
+} from "./thread-service.js";
 
 const ORCHESTRATOR_SYSTEM_PROMPT = [
   "You are OpenSlate, a swarm-native coding agent.",
-  "You can delegate tactical work to child threads when useful.",
+  "Default behavior: if a request is anything beyond a very direct/simple response, delegate tactical work to child threads.",
+  "Delegate aggressively for analysis, code reading, multi-step tasks, or anything that benefits from parallel execution.",
+  "Do NOT delegate for: greetings, simple factual one-liners, or clarification questions that require no execution.",
+  "Keep delegation bounded and focused: spawn 1-3 threads max per turn.",
+  "Prefer narrow, high-signal thread tasks over broad exploratory scans.",
   "To delegate, include a fenced JSON block using the delegate fence exactly:",
   "```delegate",
-  "[{\"alias\": \"code-reader\", \"task\": \"Read and summarize the main entry point\"}]",
+  '[{"alias": "code-reader", "task": "Read and summarize the main entry point", "reason": "Need focused entrypoint analysis", "expectedOutput": "A concise summary with concrete files", "capabilities": ["read", "search"]}]',
   "```",
-  "The delegate block MUST be an array of objects with:",
-  "- alias: string",
-  "- task: string",
-  "Only delegate when decomposition or parallel execution materially helps.",
-  "For simple prompts, answer directly with no delegate block.",
-  "After delegation results come back, synthesize a clear final answer that incorporates child work.",
-  "Keep delegations bounded: at most 1-2 threads per turn.",
-  "Prefer narrower, faster child tasks over broad scans.",
+  "The delegate block MUST be an array of objects with alias + task. reason/expectedOutput/capabilities are optional but recommended.",
+  "After delegation results come back, synthesize a clear final answer that incorporates child work and cites concrete findings.",
 ].join("\n");
 
-const MAX_THREADS_PER_TURN = 2;
+const MAX_THREADS_PER_TURN = 3;
 const DEFAULT_CHILD_MAX_ITERATIONS = 8;
+const DEFAULT_DELEGATION_CAPABILITIES = ["read", "search"];
 
 interface DelegationRequest {
   alias: string;
   task: string;
+  reason: string | null;
+  expectedOutput: string | null;
+  capabilities: string[];
 }
 
-// ThreadRunCard — structured representation of a thread run for the TUI
+export interface DelegationPolicy {
+  maxThreadsPerTurn: number;
+  childMaxIterations: number;
+  defaultCapabilities: string[];
+}
+
+export interface DelegationPlanEntry {
+  alias: string;
+  task: string;
+  reason: string | null;
+  expectedOutput: string | null;
+  capabilities: string[];
+}
+
+export interface DelegationPlan {
+  id: string;
+  createdAt: string;
+  policy: DelegationPolicy;
+  entries: DelegationPlanEntry[];
+}
+
 export interface ThreadRunCard {
   alias: string | null;
   task: string;
@@ -53,23 +79,45 @@ export interface ThreadRunCard {
   status: "completed" | "aborted" | "escalated";
   reused: boolean;
   output: string | null;
+  summary: string | null;
+  keyFindings: string[];
+  filesRead: string[];
+  filesChanged: string[];
+  toolCallCount: number;
+  durationMs: number | null;
+  model: string | null;
+  tokenUsage: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  } | null;
+  estimatedCostUsd: number | null;
+  completionContractValidity: "valid" | "missing" | "malformed" | null;
   workerReturnId: string;
   startedAt: string;
   finishedAt: string | null;
+  delegationReason: string | null;
+  expectedOutput: string | null;
+  capabilities: string[];
 }
 
 export interface OrchestratorResult {
   userMessage: Message;
-  /** The final assistant message (synthesis after delegation, or direct response) */
   assistantMessage: Message;
-  /** Thread runs that happened during this turn, in order */
   threadRuns: ThreadRunCard[];
-  /** Token usage for the orchestrator's own model calls */
-  usage?: { promptTokens: number; completionTokens: number; totalTokens: number } | null;
+  delegationPlan: DelegationPlan | null;
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  } | null;
 }
 
 export interface OrchestratorService {
-  sendMessage(sessionId: SessionId, content: string): Promise<OrchestratorResult>;
+  sendMessage(
+    sessionId: SessionId,
+    content: string,
+  ): Promise<OrchestratorResult>;
 }
 
 export interface OrchestratorServiceDeps {
@@ -81,7 +129,9 @@ export interface OrchestratorServiceDeps {
   systemPrompt?: string;
 }
 
-function toModelMessages(history: Message[]): Array<{ role: string; content: string }> {
+function toModelMessages(
+  history: Message[],
+): Array<{ role: string; content: string }> {
   return history.map((msg) => ({
     role: msg.role,
     content: msg.parts
@@ -118,26 +168,58 @@ function mergeUsage(
 ): ModelCallResult["usage"] | null {
   if (!a && !b) return null;
   const promptTokens = (a?.promptTokens ?? 0) + (b?.promptTokens ?? 0);
-  const completionTokens = (a?.completionTokens ?? 0) + (b?.completionTokens ?? 0);
+  const completionTokens =
+    (a?.completionTokens ?? 0) + (b?.completionTokens ?? 0);
   const totalTokens = (a?.totalTokens ?? 0) + (b?.totalTokens ?? 0);
   return { promptTokens, completionTokens, totalTokens };
 }
 
 function buildSynthesisContext(threadRuns: ThreadRunCard[]): string {
   const lines: string[] = [
-    "The following child threads completed. Incorporate their results into your response:",
+    "Child thread run context (WorkerReturn-first):",
+    "Use this structured data directly when synthesizing the final response.",
   ];
 
   for (const run of threadRuns) {
     const label = run.alias ?? run.childSessionId;
-    const preview = formatOutputPreview(run.output, 320);
-    lines.push(`Thread [${label}]: ${run.status} — ${preview}`);
+    const findings = run.keyFindings.length > 0 ? run.keyFindings : ["(none)"];
+    const filesRead = run.filesRead.length > 0 ? run.filesRead : ["(none)"];
+    const filesChanged =
+      run.filesChanged.length > 0 ? run.filesChanged : ["(none)"];
+
+    lines.push("---");
+    lines.push(`Thread: ${label}`);
+    lines.push(`Task: ${run.task}`);
+    lines.push(`Delegation Reason: ${run.delegationReason ?? "(none)"}`);
+    lines.push(`Expected Output: ${run.expectedOutput ?? "(none)"}`);
+    lines.push(`Capabilities: ${run.capabilities.join(", ") || "(none)"}`);
+    lines.push(`Status: ${run.status}`);
+    lines.push(
+      `Completion Contract: ${run.completionContractValidity ?? "unknown"}`,
+    );
+    lines.push(`Summary: ${run.summary ?? "(none)"}`);
+    lines.push(`Key Findings: ${findings.join(" | ")}`);
+    lines.push(`Files Read: ${filesRead.join(" | ")}`);
+    lines.push(`Files Changed: ${filesChanged.join(" | ")}`);
+    lines.push(`Tool Calls: ${run.toolCallCount}`);
+    lines.push(`Duration (ms): ${run.durationMs ?? "unknown"}`);
+    lines.push(`Model: ${run.model ?? "unknown"}`);
+    lines.push(
+      `Token Usage: ${run.tokenUsage ? JSON.stringify(run.tokenUsage) : "unknown"}`,
+    );
+    lines.push(
+      `Estimated Cost USD: ${run.estimatedCostUsd == null ? "unknown" : run.estimatedCostUsd}`,
+    );
+    lines.push(`Output Preview: ${formatOutputPreview(run.output, 320)}`);
   }
 
   return lines.join("\n");
 }
 
-function parseDelegations(text: string): { delegations: DelegationRequest[]; cleanText: string } {
+export function parseDelegations(text: string): {
+  delegations: DelegationRequest[];
+  cleanText: string;
+} {
   const pattern = /```delegate\n([\s\S]*?)```/g;
   const delegations: DelegationRequest[] = [];
   let match: RegExpExecArray | null;
@@ -155,17 +237,40 @@ function parseDelegations(text: string): { delegations: DelegationRequest[]; cle
 
         const maybeAlias = (item as Record<string, unknown>).alias;
         const maybeTask = (item as Record<string, unknown>).task;
+        const maybeReason = (item as Record<string, unknown>).reason;
+        const maybeExpectedOutput = (item as Record<string, unknown>)
+          .expectedOutput;
+        const maybeCapabilities = (item as Record<string, unknown>)
+          .capabilities;
 
         if (typeof maybeAlias === "string" && typeof maybeTask === "string") {
           const alias = maybeAlias.trim();
           const task = maybeTask.trim();
-          if (alias.length > 0 && task.length > 0) {
-            delegations.push({ alias, task });
-          }
+          if (alias.length === 0 || task.length === 0) continue;
+
+          delegations.push({
+            alias,
+            task,
+            reason:
+              typeof maybeReason === "string" && maybeReason.trim()
+                ? maybeReason.trim()
+                : null,
+            expectedOutput:
+              typeof maybeExpectedOutput === "string" &&
+              maybeExpectedOutput.trim()
+                ? maybeExpectedOutput.trim()
+                : null,
+            capabilities: Array.isArray(maybeCapabilities)
+              ? maybeCapabilities.filter(
+                  (x): x is string =>
+                    typeof x === "string" && x.trim().length > 0,
+                )
+              : [],
+          });
         }
       }
     } catch {
-      // Ignore malformed delegate blocks; model text remains usable.
+      // Ignore malformed delegate blocks.
     }
   }
 
@@ -189,7 +294,10 @@ function stripDelegateBlocks(parts: MessagePart[]): MessagePart[] {
   });
 }
 
-function threadResultToCard(result: SpawnThreadResult): ThreadRunCard {
+function threadResultToCard(
+  result: SpawnThreadResult,
+  entry: DelegationPlanEntry,
+): ThreadRunCard {
   return {
     alias: result.workerReturn.alias,
     task: result.workerReturn.task,
@@ -197,13 +305,57 @@ function threadResultToCard(result: SpawnThreadResult): ThreadRunCard {
     status: result.workerReturn.status,
     reused: result.reused,
     output: result.workerReturn.output,
+    summary: result.workerReturn.summary ?? null,
+    keyFindings: result.workerReturn.keyFindings ?? [],
+    filesRead: result.workerReturn.filesRead ?? [],
+    filesChanged: result.workerReturn.filesChanged ?? [],
+    toolCallCount: result.workerReturn.toolCalls?.length ?? 0,
+    durationMs: result.workerReturn.durationMs ?? null,
+    model: result.workerReturn.model ?? null,
+    tokenUsage: result.workerReturn.tokenUsage ?? null,
+    estimatedCostUsd: result.workerReturn.estimatedCostUsd ?? null,
+    completionContractValidity:
+      result.workerReturn.completionContract?.validity ?? null,
     workerReturnId: result.workerReturn.id,
     startedAt: result.workerReturn.startedAt,
     finishedAt: result.workerReturn.finishedAt,
+    delegationReason: entry.reason,
+    expectedOutput: entry.expectedOutput,
+    capabilities: entry.capabilities,
   };
 }
 
-export function createOrchestratorService(deps: OrchestratorServiceDeps): OrchestratorService {
+function createDelegationPlan(
+  delegations: DelegationRequest[],
+): DelegationPlan {
+  const policy: DelegationPolicy = {
+    maxThreadsPerTurn: MAX_THREADS_PER_TURN,
+    childMaxIterations: DEFAULT_CHILD_MAX_ITERATIONS,
+    defaultCapabilities: [...DEFAULT_DELEGATION_CAPABILITIES],
+  };
+
+  const entries = delegations.slice(0, MAX_THREADS_PER_TURN).map((d) => ({
+    alias: d.alias,
+    task: d.task,
+    reason: d.reason,
+    expectedOutput: d.expectedOutput,
+    capabilities:
+      d.capabilities.length > 0
+        ? d.capabilities
+        : [...DEFAULT_DELEGATION_CAPABILITIES],
+  }));
+
+  return {
+    id: crypto.randomUUID(),
+    createdAt: new Date().toISOString(),
+    policy,
+    entries,
+  };
+}
+
+export function createOrchestratorService(
+  deps: OrchestratorServiceDeps,
+): OrchestratorService {
   const {
     sessionStore,
     messageStore,
@@ -214,7 +366,10 @@ export function createOrchestratorService(deps: OrchestratorServiceDeps): Orches
   } = deps;
 
   return {
-    async sendMessage(sessionId: SessionId, content: string): Promise<OrchestratorResult> {
+    async sendMessage(
+      sessionId: SessionId,
+      content: string,
+    ): Promise<OrchestratorResult> {
       const session: Session | null = sessionStore.get(sessionId);
       if (!session) {
         throw new Error(`Session not found: ${sessionId}`);
@@ -225,7 +380,9 @@ export function createOrchestratorService(deps: OrchestratorServiceDeps): Orches
         role: "user",
         parts: [{ kind: "text", content }],
       });
-      events.emit(RuntimeEvents.messageCreated(sessionId, userMessage.id, "user"));
+      events.emit(
+        RuntimeEvents.messageCreated(sessionId, userMessage.id, "user"),
+      );
 
       const baseSystemPrompt = combineSystemPrompt(systemPrompt);
 
@@ -241,14 +398,19 @@ export function createOrchestratorService(deps: OrchestratorServiceDeps): Orches
       try {
         phase1Result = await modelCall(phase1Input);
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Model call failed";
+        const message =
+          error instanceof Error ? error.message : "Model call failed";
         const failed = messageStore.append({
           sessionId,
           role: "assistant",
           parts: [{ kind: "status", content: `error: ${message}` }],
         });
-        events.emit(RuntimeEvents.messageCreated(sessionId, failed.id, "assistant"));
-        events.emit(RuntimeEvents.assistantFailed(sessionId, failed.id, message));
+        events.emit(
+          RuntimeEvents.messageCreated(sessionId, failed.id, "assistant"),
+        );
+        events.emit(
+          RuntimeEvents.assistantFailed(sessionId, failed.id, message),
+        );
         sessionStore.touch(sessionId);
         events.emit(RuntimeEvents.sessionUpdated(sessionId, "updatedAt"));
         throw error;
@@ -263,8 +425,16 @@ export function createOrchestratorService(deps: OrchestratorServiceDeps): Orches
           role: "assistant",
           parts: phase1Result.parts,
         });
-        events.emit(RuntimeEvents.messageCreated(sessionId, assistantMessage.id, "assistant"));
-        events.emit(RuntimeEvents.assistantCompleted(sessionId, assistantMessage.id));
+        events.emit(
+          RuntimeEvents.messageCreated(
+            sessionId,
+            assistantMessage.id,
+            "assistant",
+          ),
+        );
+        events.emit(
+          RuntimeEvents.assistantCompleted(sessionId, assistantMessage.id),
+        );
 
         sessionStore.touch(sessionId);
         events.emit(RuntimeEvents.sessionUpdated(sessionId, "updatedAt"));
@@ -273,36 +443,53 @@ export function createOrchestratorService(deps: OrchestratorServiceDeps): Orches
           userMessage,
           assistantMessage,
           threadRuns: [],
+          delegationPlan: null,
           usage: phase1Result.usage ?? null,
         };
       }
 
-      const boundedDelegations = delegations.slice(0, MAX_THREADS_PER_TURN);
+      const delegationPlan = createDelegationPlan(delegations);
+
       const threadRuns = await Promise.all(
-        boundedDelegations.map(async (delegation, i): Promise<ThreadRunCard> => {
+        delegationPlan.entries.map(async (entry, i): Promise<ThreadRunCard> => {
           const spawnInput: SpawnThreadInput = {
             parentSessionId: sessionId,
-            alias: delegation.alias,
-            task: delegation.task,
-            maxIterations: DEFAULT_CHILD_MAX_ITERATIONS,
+            alias: entry.alias,
+            task: entry.task,
+            capabilities: entry.capabilities,
+            maxIterations: delegationPlan.policy.childMaxIterations,
           };
 
           try {
             const runResult = await threadService.spawnAndRun(spawnInput);
-            return threadResultToCard(runResult);
+            return threadResultToCard(runResult, entry);
           } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
+            const message =
+              error instanceof Error ? error.message : String(error);
             const now = new Date().toISOString();
             return {
-              alias: delegation.alias,
-              task: delegation.task,
+              alias: entry.alias,
+              task: entry.task,
               childSessionId: sessionId,
               status: "aborted",
               reused: false,
               output: `Thread dispatch failed: ${message}`,
+              summary: "Thread dispatch failed",
+              keyFindings: [message],
+              filesRead: [],
+              filesChanged: [],
+              toolCallCount: 0,
+              durationMs: null,
+              model: null,
+              tokenUsage: null,
+              estimatedCostUsd: null,
+              completionContractValidity: "missing",
               workerReturnId: `dispatch-error-${i + 1}-${Date.now()}`,
               startedAt: now,
               finishedAt: now,
+              delegationReason: entry.reason,
+              expectedOutput: entry.expectedOutput,
+              capabilities: entry.capabilities,
             };
           }
         }),
@@ -312,12 +499,25 @@ export function createOrchestratorService(deps: OrchestratorServiceDeps): Orches
       if (cleanText.length > 0) {
         planParts.push({ kind: "text", content: cleanText });
       } else {
-        planParts.push({ kind: "text", content: "Delegating to child threads and collecting results." });
+        planParts.push({
+          kind: "text",
+          content: "Delegating to child threads and collecting results.",
+        });
       }
+
+      planParts.push({
+        kind: "delegation_plan",
+        planId: delegationPlan.id,
+        policy: delegationPlan.policy,
+        entries: delegationPlan.entries,
+      });
 
       for (const run of threadRuns) {
         if (!run.workerReturnId.startsWith("dispatch-error-")) {
-          planParts.push({ kind: "worker_return_ref", workerReturnId: run.workerReturnId });
+          planParts.push({
+            kind: "worker_return_ref",
+            workerReturnId: run.workerReturnId,
+          });
         }
       }
 
@@ -326,7 +526,13 @@ export function createOrchestratorService(deps: OrchestratorServiceDeps): Orches
         role: "assistant",
         parts: planParts,
       });
-      events.emit(RuntimeEvents.messageCreated(sessionId, intermediateAssistant.id, "assistant"));
+      events.emit(
+        RuntimeEvents.messageCreated(
+          sessionId,
+          intermediateAssistant.id,
+          "assistant",
+        ),
+      );
 
       const historyForPhase2 = messageStore.listBySession(sessionId);
       const synthesisContext = buildSynthesisContext(threadRuns);
@@ -344,14 +550,21 @@ export function createOrchestratorService(deps: OrchestratorServiceDeps): Orches
       try {
         phase2Result = await modelCall(phase2Input);
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Model synthesis call failed";
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Model synthesis call failed";
         const failed = messageStore.append({
           sessionId,
           role: "assistant",
           parts: [{ kind: "status", content: `error: ${message}` }],
         });
-        events.emit(RuntimeEvents.messageCreated(sessionId, failed.id, "assistant"));
-        events.emit(RuntimeEvents.assistantFailed(sessionId, failed.id, message));
+        events.emit(
+          RuntimeEvents.messageCreated(sessionId, failed.id, "assistant"),
+        );
+        events.emit(
+          RuntimeEvents.assistantFailed(sessionId, failed.id, message),
+        );
         sessionStore.touch(sessionId);
         events.emit(RuntimeEvents.sessionUpdated(sessionId, "updatedAt"));
         throw error;
@@ -364,8 +577,16 @@ export function createOrchestratorService(deps: OrchestratorServiceDeps): Orches
         role: "assistant",
         parts: cleanedPhase2Parts,
       });
-      events.emit(RuntimeEvents.messageCreated(sessionId, assistantMessage.id, "assistant"));
-      events.emit(RuntimeEvents.assistantCompleted(sessionId, assistantMessage.id));
+      events.emit(
+        RuntimeEvents.messageCreated(
+          sessionId,
+          assistantMessage.id,
+          "assistant",
+        ),
+      );
+      events.emit(
+        RuntimeEvents.assistantCompleted(sessionId, assistantMessage.id),
+      );
 
       sessionStore.touch(sessionId);
       events.emit(RuntimeEvents.sessionUpdated(sessionId, "updatedAt"));
@@ -374,10 +595,9 @@ export function createOrchestratorService(deps: OrchestratorServiceDeps): Orches
         userMessage,
         assistantMessage,
         threadRuns,
+        delegationPlan,
         usage: mergeUsage(phase1Result.usage, phase2Result.usage),
       };
     },
   };
 }
-
-export { parseDelegations };
