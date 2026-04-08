@@ -17,20 +17,17 @@ import {
   createOrchestratorService,
 } from "@openslate/core";
 import type { ChildToolCall } from "@openslate/core";
+import { createProviderRegistry } from "@openslate/models";
+import type { ModelRouterConfig } from "@openslate/models";
 import {
-  createProviderRegistry,
-  createModelRouter,
-  registerBuiltins,
-} from "@openslate/models";
-import type { ModelRouterConfig, ModelSlotConfig } from "@openslate/models";
-import {
-  createToolRegistry,
-  registerBuiltinTools,
-} from "@openslate/tools";
+  createRuntimeConfigService,
+  estimateCostUsd,
+  getModelLabel,
+} from "./runtime-config-service.js";
+import { createToolRegistry, registerBuiltinTools } from "@openslate/tools";
 import type { ToolCapability } from "@openslate/tools";
 import { createServer } from "./server.js";
 import type { ServerConfig } from "./server.js";
-
 // ── Bootstrap Config ─────────────────────────────────────────────────
 
 export interface BootstrapConfig {
@@ -54,19 +51,20 @@ export async function bootstrap(config: BootstrapConfig = {}) {
   // 2. Initialize event bus
   const events = createEventBus();
 
-  // 3. Initialize model layer
+  // 3. Initialize model layer + persisted config/auth
   const registry = createProviderRegistry();
-  registerBuiltins(registry);
-
-  const routerConfig = config.routerConfig ?? buildDefaultRouterConfig();
-  const router = createModelRouter(routerConfig, registry);
+  const runtimeConfig = createRuntimeConfigService(
+    db,
+    registry,
+    config.routerConfig,
+  );
 
   // 4. Initialize tool registry
   const toolRegistry = createToolRegistry();
   registerBuiltinTools(toolRegistry);
-
   // 5. Create parent model call adapter (chat mode, no tools)
   const modelCall = createModelCallAdapter(async (input) => {
+    const router = runtimeConfig.getRouter();
     const result = await router.complete("primary", {
       messages: input.messages.map((m) => ({
         role: m.role as "user" | "assistant" | "system",
@@ -82,12 +80,13 @@ export async function bootstrap(config: BootstrapConfig = {}) {
         ? {
             promptTokens: result.usage.inputTokens ?? 0,
             completionTokens: result.usage.outputTokens ?? 0,
-            totalTokens: (result.usage.inputTokens ?? 0) + (result.usage.outputTokens ?? 0),
+            totalTokens:
+              (result.usage.inputTokens ?? 0) +
+              (result.usage.outputTokens ?? 0),
           }
         : undefined,
     };
   });
-
   // 6. Create child model call adapter (tool-calling mode)
   const childModelCall = createChildModelCallAdapter(async (input) => {
     // Build AI SDK tool definitions from our tool format
@@ -105,26 +104,40 @@ export async function bootstrap(config: BootstrapConfig = {}) {
     // Build messages for AI SDK
     const messages = buildAIMessages(input.messages);
 
+    const router = runtimeConfig.getRouter();
     const result = await router.complete("execute", {
       messages,
       system: input.system,
       tools: Object.keys(aiTools).length > 0 ? aiTools : undefined,
     });
 
-      return {
-        text: result.text ?? "",
-        toolCalls: normalizeRouterToolCalls(result.toolCalls ?? []),
-        finishReason: result.finishReason ?? "stop",
-      };
-  });
+    const usage = result.usage
+      ? {
+          promptTokens: result.usage.inputTokens ?? 0,
+          completionTokens: result.usage.outputTokens ?? 0,
+          totalTokens:
+            (result.usage.inputTokens ?? 0) + (result.usage.outputTokens ?? 0),
+        }
+      : undefined;
 
+    return {
+      text: result.text ?? "",
+      toolCalls: normalizeRouterToolCalls(result.toolCalls ?? []),
+      finishReason: result.finishReason ?? "stop",
+      usage,
+      model: await getModelLabel(router, "execute"),
+      estimatedCostUsd: await estimateCostUsd(router, "execute", usage),
+    };
+  });
   // 7. Create session service (parent)
   const sessionService = createSessionService({
     sessionStore,
     messageStore,
     events,
     modelCall,
-    systemPrompt: config.systemPrompt ?? "You are OpenSlate, an AI assistant. Be helpful, clear, and concise.",
+    systemPrompt:
+      config.systemPrompt ??
+      "You are OpenSlate, an AI assistant. Be helpful, clear, and concise.",
   });
 
   // 8. Create thread service
@@ -165,8 +178,13 @@ export async function bootstrap(config: BootstrapConfig = {}) {
 
   // 9. Create and return server
   const serverConfig: ServerConfig = { port, host };
-  const server = createServer(serverConfig, { sessionService, threadService, orchestratorService, events });
-
+  const server = createServer(serverConfig, {
+    sessionService,
+    threadService,
+    orchestratorService,
+    events,
+    configService: runtimeConfig,
+  });
   return {
     server,
     sessionService,
@@ -184,13 +202,19 @@ function normalizeReasoning(value: unknown): string | undefined {
   if (typeof value === "string") return value;
   if (value == null) return undefined;
   if (Array.isArray(value)) {
-    return value
-      .map((item) => normalizeReasoning(item))
-      .filter((item): item is string => Boolean(item))
-      .join("\n") || undefined;
+    return (
+      value
+        .map((item) => normalizeReasoning(item))
+        .filter((item): item is string => Boolean(item))
+        .join("\n") || undefined
+    );
   }
   if (typeof value === "object") {
-    try { return JSON.stringify(value); } catch { return String(value); }
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
   }
   return String(value);
 }
@@ -199,8 +223,17 @@ function normalizeReasoning(value: unknown): string | undefined {
  * Build AI SDK compatible messages from our internal format.
  */
 export function normalizeRouterToolCalls(
-  toolCalls: Array<{ toolCallId: string; toolName: string; args?: unknown; input?: unknown }>,
-): Array<{ toolCallId: string; toolName: string; args: Record<string, unknown> }> {
+  toolCalls: Array<{
+    toolCallId: string;
+    toolName: string;
+    args?: unknown;
+    input?: unknown;
+  }>,
+): Array<{
+  toolCallId: string;
+  toolName: string;
+  args: Record<string, unknown>;
+}> {
   return toolCalls.map((tc) => ({
     toolCallId: tc.toolCallId,
     toolName: tc.toolName,
@@ -208,30 +241,39 @@ export function normalizeRouterToolCalls(
   }));
 }
 
-export function buildAIMessages(messages: Array<{
-  role: string;
-  content: string;
-  toolCallId?: string;
-  toolName?: string;
-  isError?: boolean;
-  toolCalls?: ChildToolCall[];
-}>): any[] {
-  const toolCallInputs = new Map<string, { toolName: string; input: Record<string, unknown> }>();
+export function buildAIMessages(
+  messages: Array<{
+    role: string;
+    content: string;
+    toolCallId?: string;
+    toolName?: string;
+    isError?: boolean;
+    toolCalls?: ChildToolCall[];
+  }>,
+): any[] {
+  const toolCallInputs = new Map<
+    string,
+    { toolName: string; input: Record<string, unknown> }
+  >();
 
   return messages.map((msg) => {
     if (msg.role === "tool") {
-      const priorCall = msg.toolCallId ? toolCallInputs.get(msg.toolCallId) : undefined;
+      const priorCall = msg.toolCallId
+        ? toolCallInputs.get(msg.toolCallId)
+        : undefined;
       return {
         role: "tool",
-        content: [{
-          type: "tool-result",
-          toolCallId: msg.toolCallId,
-          toolName: msg.toolName ?? priorCall?.toolName ?? "unknown_tool",
-          input: priorCall?.input ?? {},
-          output: msg.isError
-            ? { type: "error-text", value: msg.content }
-            : { type: "text", value: msg.content },
-        }],
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: msg.toolCallId,
+            toolName: msg.toolName ?? priorCall?.toolName ?? "unknown_tool",
+            input: priorCall?.input ?? {},
+            output: msg.isError
+              ? { type: "error-text", value: msg.content }
+              : { type: "text", value: msg.content },
+          },
+        ],
       };
     }
     if (msg.role === "assistant" && msg.toolCalls && msg.toolCalls.length > 0) {
@@ -256,38 +298,8 @@ export function buildAIMessages(messages: Array<{
   });
 }
 
-function buildDefaultRouterConfig(): ModelRouterConfig {
-  const explicitProvider = process.env.OPENSLATE_PRIMARY_PROVIDER;
-  const explicitModel = process.env.OPENSLATE_PRIMARY_MODEL;
-
-  if (explicitProvider && explicitModel) {
-    const primary = { provider: explicitProvider as any, model: explicitModel as any };
-    return { primary, execute: primary, explore: primary, search: primary, compress: primary };
-  }
-
-  const hasAnthropic = !!process.env.ANTHROPIC_API_KEY;
-  const hasOpenAI = !!process.env.OPENAI_API_KEY;
-  const hasFireworks = !!process.env.FIREWORKS_API_KEY;
-
-  let primary: ModelSlotConfig;
-
-  if (hasAnthropic) {
-    primary = { provider: "anthropic" as any, model: "claude-sonnet-4-20250514" as any };
-  } else if (hasOpenAI) {
-    primary = { provider: "openai" as any, model: "gpt-4o" as any };
-  } else if (hasFireworks) {
-    primary = { provider: "fireworks" as any, model: "accounts/fireworks/models/deepseek-v3" as any };
-  } else {
-    throw new Error(
-      "No model provider configured. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or FIREWORKS_API_KEY."
-    );
-  }
-
-  return { primary, execute: primary, explore: primary, search: primary, compress: primary };
-}
-
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : undefined;
 }
