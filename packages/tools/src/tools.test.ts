@@ -81,4 +81,17 @@ describe("ToolRegistry", () => {
   test("BUILTIN_TOOLS constant has all 6 tools", () => {
     expect(BUILTIN_TOOLS).toHaveLength(6);
   });
+
+  test("execute surfaces invalid argument errors clearly", async () => {
+    const registry = createToolRegistry();
+    registerBuiltinTools(registry);
+
+    const result = await registry.execute(
+      { id: "tc-2", name: "read_file", args: {} },
+      ["read"] as ToolCapability[],
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("Invalid or missing 'path' argument");
+  });
 });

@@ -12,6 +12,14 @@ import { join, relative, resolve } from "node:path";
 import { execSync } from "node:child_process";
 import type { RegisteredTool } from "./types.js";
 
+function requiredStringArg(args: Record<string, unknown>, key: string): string {
+  const value = args[key];
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`Invalid or missing '${key}' argument`);
+  }
+  return value;
+}
+
 // ── read_file ────────────────────────────────────────────────────────
 
 export const readFileTool: RegisteredTool = {
@@ -30,7 +38,7 @@ export const readFileTool: RegisteredTool = {
     capability: "read",
   },
   async execute(args) {
-    const filePath = String(args.path);
+    const filePath = requiredStringArg(args, "path");
     if (!existsSync(filePath)) {
       throw new Error(`File not found: ${filePath}`);
     }
@@ -61,7 +69,7 @@ export const globFilesTool: RegisteredTool = {
     capability: "read",
   },
   async execute(args) {
-    const pattern = String(args.pattern);
+    const pattern = requiredStringArg(args, "pattern");
     const cwd = typeof args.cwd === "string" ? args.cwd : process.cwd();
     // Use Bun's built-in Glob
     const glob = new Bun.Glob(pattern);
@@ -94,8 +102,8 @@ export const grepContentTool: RegisteredTool = {
     capability: "search",
   },
   async execute(args) {
-    const pattern = String(args.pattern);
-    const searchPath = String(args.path);
+    const pattern = requiredStringArg(args, "pattern");
+    const searchPath = requiredStringArg(args, "path");
     const include = typeof args.include === "string" ? args.include : "";
 
     try {
@@ -137,8 +145,8 @@ export const writeFileTool: RegisteredTool = {
     capability: "write",
   },
   async execute(args) {
-    const filePath = String(args.path);
-    const content = String(args.content);
+    const filePath = requiredStringArg(args, "path");
+    const content = requiredStringArg(args, "content");
     const { mkdirSync } = await import("node:fs");
     const { dirname } = await import("node:path");
     mkdirSync(dirname(filePath), { recursive: true });
@@ -164,8 +172,8 @@ export const applyPatchTool: RegisteredTool = {
     capability: "write",
   },
   async execute(args) {
-    const filePath = String(args.path);
-    const patch = String(args.patch);
+    const filePath = requiredStringArg(args, "path");
+    const patch = requiredStringArg(args, "patch");
     // Simple line-level patch application
     // For now, use the patch command if available
     try {
@@ -202,7 +210,7 @@ export const shellTool: RegisteredTool = {
     capability: "shell",
   },
   async execute(args) {
-    const command = String(args.command);
+    const command = requiredStringArg(args, "command");
     const cwd = typeof args.cwd === "string" ? args.cwd : process.cwd();
     const timeout = typeof args.timeout === "number" ? args.timeout : 30000;
     try {
