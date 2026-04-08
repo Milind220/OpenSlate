@@ -25,6 +25,11 @@ export interface ServerDeps {
   threadService: ThreadService;
   orchestratorService: OrchestratorService;
   events: EventBus;
+  configService?: {
+    getConfig(): any;
+    setConfig(c: any): any;
+    login(provider: string, apiKey: string): any;
+  };
 }
 
 export interface OpenSlateServer {
@@ -49,7 +54,10 @@ function errorResponse(message: string, status = 400): Response {
 
 // ── Server ───────────────────────────────────────────────────────────
 
-export function createServer(config: ServerConfig, deps: ServerDeps): OpenSlateServer {
+export function createServer(
+  config: ServerConfig,
+  deps: ServerDeps,
+): OpenSlateServer {
   const { sessionService, threadService, events } = deps;
   let server: ReturnType<typeof Bun.serve> | null = null;
 
@@ -66,10 +74,14 @@ export function createServer(config: ServerConfig, deps: ServerDeps): OpenSlateS
 
       // POST /sessions
       if (method === "POST" && path === "/sessions") {
-        const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+        const body = (await req.json().catch(() => ({}))) as Record<
+          string,
+          unknown
+        >;
         const session = sessionService.createSession({
           title: typeof body.title === "string" ? body.title : undefined,
-          projectId: typeof body.projectId === "string" ? body.projectId : undefined,
+          projectId:
+            typeof body.projectId === "string" ? body.projectId : undefined,
         });
         return json(session, 201);
       }
@@ -102,37 +114,49 @@ export function createServer(config: ServerConfig, deps: ServerDeps): OpenSlateS
       const messagesPostMatch = path.match(/^\/sessions\/([^\/]+)\/messages$/);
       if (method === "POST" && messagesPostMatch) {
         const sessionId = messagesPostMatch[1] as SessionId;
-        const body = await req.json() as Record<string, unknown>;
+        const body = (await req.json()) as Record<string, unknown>;
         const content = body.content;
         if (typeof content !== "string" || !content.trim()) {
           return errorResponse("Missing or empty 'content' field");
         }
 
         const result = await sessionService.sendMessage(sessionId, content);
-        return json({
-          userMessage: result.userMessage,
-          assistantMessage: result.assistantMessage,
-          usage: result.usage ?? null,
-        }, 201);
+        return json(
+          {
+            userMessage: result.userMessage,
+            assistantMessage: result.assistantMessage,
+            usage: result.usage ?? null,
+          },
+          201,
+        );
       }
 
       // POST /sessions/:id/orchestrate — send message through orchestrator
-      const orchestrateMatch = path.match(/^\/sessions\/([^\/]+)\/orchestrate$/);
+      const orchestrateMatch = path.match(
+        /^\/sessions\/([^\/]+)\/orchestrate$/,
+      );
       if (method === "POST" && orchestrateMatch) {
         const sessionId = orchestrateMatch[1] as SessionId;
-        const body = await req.json() as Record<string, unknown>;
+        const body = (await req.json()) as Record<string, unknown>;
         const content = body.content;
         if (typeof content !== "string" || !content.trim()) {
           return errorResponse("Missing or empty 'content' field");
         }
 
-        const result = await deps.orchestratorService.sendMessage(sessionId, content);
-        return json({
-          userMessage: result.userMessage,
-          assistantMessage: result.assistantMessage,
-          threadRuns: result.threadRuns,
-          usage: result.usage ?? null,
-        }, 201);
+        const result = await deps.orchestratorService.sendMessage(
+          sessionId,
+          content,
+        );
+        return json(
+          {
+            userMessage: result.userMessage,
+            assistantMessage: result.assistantMessage,
+            threadRuns: result.threadRuns,
+            delegationPlan: result.delegationPlan,
+            usage: result.usage ?? null,
+          },
+          201,
+        );
       }
 
       // ── Thread Routes ────────────────────────────────────────────
@@ -140,13 +164,15 @@ export function createServer(config: ServerConfig, deps: ServerDeps): OpenSlateS
       const threadsPostMatch = path.match(/^\/sessions\/([^\/]+)\/threads$/);
       if (method === "POST" && threadsPostMatch) {
         const parentSessionId = threadsPostMatch[1] as SessionId;
-        const body = await req.json() as Record<string, unknown>;
+        const body = (await req.json()) as Record<string, unknown>;
         const task = body.task;
         if (typeof task !== "string" || !task.trim()) {
           return errorResponse("Missing or empty 'task' field");
         }
         const alias = typeof body.alias === "string" ? body.alias : undefined;
-        const capabilities = Array.isArray(body.capabilities) ? body.capabilities as string[] : undefined;
+        const capabilities = Array.isArray(body.capabilities)
+          ? (body.capabilities as string[])
+          : undefined;
 
         const result = await threadService.spawnAndRun({
           parentSessionId,
@@ -155,11 +181,14 @@ export function createServer(config: ServerConfig, deps: ServerDeps): OpenSlateS
           capabilities,
         });
 
-        return json({
-          childSession: result.childSession,
-          workerReturn: result.workerReturn,
-          reused: result.reused,
-        }, 201);
+        return json(
+          {
+            childSession: result.childSession,
+            workerReturn: result.workerReturn,
+            reused: result.reused,
+          },
+          201,
+        );
       }
 
       // GET /sessions/:id/children — list child sessions
@@ -171,7 +200,9 @@ export function createServer(config: ServerConfig, deps: ServerDeps): OpenSlateS
       }
 
       // GET /sessions/:id/worker-returns — list worker returns for parent
-      const workerReturnsMatch = path.match(/^\/sessions\/([^\/]+)\/worker-returns$/);
+      const workerReturnsMatch = path.match(
+        /^\/sessions\/([^\/]+)\/worker-returns$/,
+      );
       if (method === "GET" && workerReturnsMatch) {
         const parentSessionId = workerReturnsMatch[1] as SessionId;
         const returns = threadService.listWorkerReturns(parentSessionId);
@@ -187,6 +218,47 @@ export function createServer(config: ServerConfig, deps: ServerDeps): OpenSlateS
         return json(wr);
       }
 
+      // GET /config
+      if (method === "GET" && path === "/config") {
+        const config = deps.configService?.getConfig() ?? {
+          providers: {},
+          models: { primary: null, execute: null },
+        };
+        return json(config);
+      }
+
+      // POST /config
+      if (method === "POST" && path === "/config") {
+        const body = await req.json().catch(() => ({}));
+        const config = deps.configService?.setConfig(body) ?? body;
+        return json(config);
+      }
+
+      // POST /login
+      if (method === "POST" && path === "/login") {
+        const body = (await req.json()) as Record<string, unknown>;
+        const provider = body.provider;
+        const apiKey = body.apiKey;
+        if (typeof provider !== "string" || typeof apiKey !== "string") {
+          return errorResponse("Missing provider or apiKey");
+        }
+        const result = deps.configService?.login(provider, apiKey) ?? {
+          ok: true,
+          provider,
+        };
+        return json(result);
+      }
+
+      // GET /sessions/:id/children/:childId/messages
+      const childMessagesMatch = path.match(
+        /^\/sessions\/([^\/]+)\/children\/([^\/]+)\/messages$/,
+      );
+      if (method === "GET" && childMessagesMatch) {
+        const childSessionId = childMessagesMatch[2] as SessionId;
+        const messages = sessionService.getMessages(childSessionId);
+        return json(messages);
+      }
+
       // GET /events (SSE)
       if (method === "GET" && path === "/events") {
         return handleSSE(events);
@@ -194,7 +266,8 @@ export function createServer(config: ServerConfig, deps: ServerDeps): OpenSlateS
 
       return errorResponse("Not found", 404);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Internal server error";
+      const message =
+        err instanceof Error ? err.message : "Internal server error";
       console.error("[openslate] request error:", err);
       return errorResponse(message, 500);
     }
@@ -212,7 +285,9 @@ export function createServer(config: ServerConfig, deps: ServerDeps): OpenSlateS
 
         unsubscribe = events.on((event: OpenSlateEvent) => {
           try {
-            controller.enqueue(encoder.encode("data: " + JSON.stringify(event) + "\n\n"));
+            controller.enqueue(
+              encoder.encode("data: " + JSON.stringify(event) + "\n\n"),
+            );
           } catch {
             // Stream closed
           }
@@ -240,7 +315,7 @@ export function createServer(config: ServerConfig, deps: ServerDeps): OpenSlateS
       headers: {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
+        Connection: "keep-alive",
       },
     });
   }
@@ -260,7 +335,12 @@ export function createServer(config: ServerConfig, deps: ServerDeps): OpenSlateS
         fetch: handleRequest,
       });
       config.port = server.port ?? config.port;
-      console.log("[openslate] server listening on " + server.hostname + ":" + server.port);
+      console.log(
+        "[openslate] server listening on " +
+          server.hostname +
+          ":" +
+          server.port,
+      );
     },
 
     async stop(): Promise<void> {
