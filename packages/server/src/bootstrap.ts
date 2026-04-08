@@ -14,6 +14,7 @@ import {
   createModelCallAdapter,
   createChildModelCallAdapter,
   createThreadService,
+  createOrchestratorService,
 } from "@openslate/core";
 import type { ChildToolCall } from "@openslate/core";
 import {
@@ -152,14 +153,25 @@ export async function bootstrap(config: BootstrapConfig = {}) {
     },
   });
 
+  // 8.5. Create orchestrator service
+  const orchestratorService = createOrchestratorService({
+    sessionStore,
+    messageStore,
+    events,
+    modelCall,
+    threadService,
+    systemPrompt: config.systemPrompt,
+  });
+
   // 9. Create and return server
   const serverConfig: ServerConfig = { port, host };
-  const server = createServer(serverConfig, { sessionService, threadService, events });
+  const server = createServer(serverConfig, { sessionService, threadService, orchestratorService, events });
 
   return {
     server,
     sessionService,
     threadService,
+    orchestratorService,
     events,
     toolRegistry,
     db,

@@ -10,6 +10,7 @@ import type {
   ThreadService,
   EventBus,
   OpenSlateEvent,
+  OrchestratorService,
 } from "@openslate/core";
 
 // ── Config ───────────────────────────────────────────────────────────
@@ -22,6 +23,7 @@ export interface ServerConfig {
 export interface ServerDeps {
   sessionService: SessionService;
   threadService: ThreadService;
+  orchestratorService: OrchestratorService;
   events: EventBus;
 }
 
@@ -110,6 +112,25 @@ export function createServer(config: ServerConfig, deps: ServerDeps): OpenSlateS
         return json({
           userMessage: result.userMessage,
           assistantMessage: result.assistantMessage,
+          usage: result.usage ?? null,
+        }, 201);
+      }
+
+      // POST /sessions/:id/orchestrate — send message through orchestrator
+      const orchestrateMatch = path.match(/^\/sessions\/([^\/]+)\/orchestrate$/);
+      if (method === "POST" && orchestrateMatch) {
+        const sessionId = orchestrateMatch[1] as SessionId;
+        const body = await req.json() as Record<string, unknown>;
+        const content = body.content;
+        if (typeof content !== "string" || !content.trim()) {
+          return errorResponse("Missing or empty 'content' field");
+        }
+
+        const result = await deps.orchestratorService.sendMessage(sessionId, content);
+        return json({
+          userMessage: result.userMessage,
+          assistantMessage: result.assistantMessage,
+          threadRuns: result.threadRuns,
           usage: result.usage ?? null,
         }, 201);
       }
