@@ -44,7 +44,8 @@ export const ansi = {
     brightMagenta: ESC + "95m",
     brightCyan: ESC + "96m",
     brightWhite: ESC + "97m",
-    rgb: (r: number, g: number, b: number) => ESC + "38;2;" + r + ";" + g + ";" + b + "m",
+    rgb: (r: number, g: number, b: number) =>
+      ESC + "38;2;" + r + ";" + g + ";" + b + "m",
   },
 
   // Background
@@ -53,7 +54,8 @@ export const ansi = {
     red: ESC + "41m",
     blue: ESC + "44m",
     gray: ESC + "100m",
-    rgb: (r: number, g: number, b: number) => ESC + "48;2;" + r + ";" + g + ";" + b + "m",
+    rgb: (r: number, g: number, b: number) =>
+      ESC + "48;2;" + r + ";" + g + ";" + b + "m",
   },
 };
 
@@ -105,13 +107,28 @@ export function box(title: string, content: string, width: number): string {
   const inner = width - 4;
   const titleStr = title ? " " + title + " " : "";
   const topPad = inner - stripAnsi(titleStr).length;
-  const top = theme.border + "┌" + titleStr + "─".repeat(Math.max(0, topPad)) + "┐" + ansi.reset;
+  const top =
+    theme.border +
+    "┌" +
+    titleStr +
+    "─".repeat(Math.max(0, topPad)) +
+    "┐" +
+    ansi.reset;
   const bottom = theme.border + "└" + "─".repeat(inner + 2) + "┘" + ansi.reset;
 
   const lines = content.split("\n").map((line) => {
     const visible = stripAnsi(line).length;
     const pad = Math.max(0, inner - visible);
-    return theme.border + "│ " + ansi.reset + line + " ".repeat(pad) + theme.border + " │" + ansi.reset;
+    return (
+      theme.border +
+      "│ " +
+      ansi.reset +
+      line +
+      " ".repeat(pad) +
+      theme.border +
+      " │" +
+      ansi.reset
+    );
   });
 
   return [top, ...lines, bottom].join("\n");
@@ -165,4 +182,261 @@ export function write(text: string): void {
 
 export function writeln(text: string = ""): void {
   process.stdout.write(text + "\n");
+}
+
+// ── Spinner ──────────────────────────────────────────────────────────
+
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+let spinnerTick = 0;
+
+export function spinner(label: string = ""): string {
+  const frame = SPINNER_FRAMES[spinnerTick % SPINNER_FRAMES.length]!;
+  spinnerTick++;
+  return theme.accent + frame + ansi.reset + (label ? " " + label : "");
+}
+
+export function resetSpinner(): void {
+  spinnerTick = 0;
+}
+
+// ── Input Bar ────────────────────────────────────────────────────────
+
+export function inputBar(
+  prompt: string,
+  value: string,
+  cursorPos: number,
+  cols: number,
+): string {
+  const promptVisible = stripAnsi(prompt).length;
+  const maxInput = Math.max(10, cols - promptVisible - 2);
+  const displayValue =
+    value.length > maxInput ? value.slice(value.length - maxInput) : value;
+  const adjustedCursor = value.length > maxInput ? maxInput : cursorPos;
+
+  const before = displayValue.slice(0, adjustedCursor);
+  const cursorChar = displayValue[adjustedCursor] || " ";
+  const after = displayValue.slice(adjustedCursor + 1);
+
+  return (
+    prompt +
+    theme.text +
+    before +
+    ansi.reset +
+    ansi.bg.rgb(137, 180, 250) +
+    ansi.fg.black +
+    cursorChar +
+    ansi.reset +
+    theme.text +
+    after +
+    ansi.reset
+  );
+}
+
+// ── Progress Bar ─────────────────────────────────────────────────────
+
+export function progressBar(
+  current: number,
+  total: number,
+  width: number = 20,
+): string {
+  const ratio = total > 0 ? Math.min(current / total, 1) : 0;
+  const filled = Math.round(ratio * width);
+  const empty = width - filled;
+  return (
+    theme.accent +
+    "█".repeat(filled) +
+    ansi.reset +
+    theme.textMuted +
+    "░".repeat(empty) +
+    ansi.reset +
+    theme.textDim +
+    " " +
+    current +
+    "/" +
+    total +
+    ansi.reset
+  );
+}
+
+// ── Key Hint ─────────────────────────────────────────────────────────
+
+export function keyHint(key: string, label: string): string {
+  return (
+    theme.border +
+    "[" +
+    ansi.reset +
+    theme.accent +
+    key +
+    ansi.reset +
+    theme.border +
+    "]" +
+    ansi.reset +
+    theme.textDim +
+    " " +
+    label +
+    ansi.reset
+  );
+}
+
+// ── Subagent Card ────────────────────────────────────────────────────
+
+export interface SubagentCardData {
+  alias: string | null;
+  task: string;
+  status: string;
+  durationMs: number | null;
+  filesRead: string[];
+  filesChanged: string[];
+  toolCallCount: number;
+  tokenUsage: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  } | null;
+  estimatedCostUsd?: number | null;
+  model?: string | null;
+  delegationReason?: string | null;
+  liveActivity?: string;
+}
+function formatDuration(ms: number | null): string {
+  if (ms == null) return "—";
+  if (ms < 1000) return ms + "ms";
+  return (ms / 1000).toFixed(1) + "s";
+}
+
+function formatCost(estimatedCostUsd: number | null | undefined): string {
+  if (estimatedCostUsd == null || !Number.isFinite(estimatedCostUsd))
+    return "—";
+  if (estimatedCostUsd < 0.001) return "<$0.001";
+  return "$" + estimatedCostUsd.toFixed(3);
+}
+export function subagentCards(
+  cards: SubagentCardData[],
+  cols: number,
+): string[] {
+  const lines: string[] = [];
+  const cardWidth = Math.max(52, Math.min(cols - 4, 100));
+  const innerWidth = cardWidth - 2;
+
+  const title =
+    "─ Ran " +
+    cards.length +
+    " subagent" +
+    (cards.length !== 1 ? "s" : "") +
+    " ";
+  lines.push(
+    "  " +
+      theme.border +
+      "┌" +
+      title +
+      "─".repeat(Math.max(0, innerWidth - title.length)) +
+      "┐" +
+      ansi.reset,
+  );
+
+  for (const card of cards) {
+    const alias = card.alias || "(unnamed)";
+    const aliasStyled = theme.alias + alias + ansi.reset;
+
+    // Status indicator
+    let statusIcon: string;
+    if (card.liveActivity) {
+      statusIcon = theme.warning + "⟳" + ansi.reset;
+    } else if (card.status === "completed") {
+      statusIcon = theme.success + "✓" + ansi.reset;
+    } else if (card.status === "aborted" || card.status === "escalated") {
+      statusIcon = theme.error + "✗" + ansi.reset;
+    } else {
+      statusIcon = theme.textDim + "●" + ansi.reset;
+    }
+
+    const dur = formatDuration(card.durationMs);
+
+    // Line 1: ● alias  task  ✓ 1.2s
+    const taskText = card.liveActivity || card.task;
+    const metaRight = statusIcon + " " + theme.textDim + dur + ansi.reset;
+    const metaRightLen = stripAnsi(metaRight).length;
+    const leftBudget = innerWidth - 4 - metaRightLen - 2;
+    const aliasLen = stripAnsi(aliasStyled).length;
+    const taskBudget = Math.max(8, leftBudget - aliasLen - 2);
+    const taskTrunc = truncate(taskText, taskBudget);
+
+    const left1 =
+      "  " +
+      theme.textDim +
+      "● " +
+      ansi.reset +
+      aliasStyled +
+      "  " +
+      theme.text +
+      taskTrunc +
+      ansi.reset;
+    const left1Len = stripAnsi(left1).length;
+    const gap1 = Math.max(1, innerWidth - 2 - left1Len - metaRightLen);
+    lines.push(
+      "  " +
+        theme.border +
+        "│ " +
+        ansi.reset +
+        left1 +
+        " ".repeat(gap1) +
+        metaRight +
+        theme.border +
+        " │" +
+        ansi.reset,
+    );
+
+    // Line 2: stats - files read · tool calls · tokens · cost
+    const stats = [
+      card.filesRead.length + card.filesChanged.length + " files",
+      card.toolCallCount + " tool calls",
+      card.tokenUsage ? card.tokenUsage.totalTokens + " tokens" : "tokens:—",
+      "cost " + formatCost(card.estimatedCostUsd),
+    ].join(" · ");
+    const statsLine = "    " + theme.textDim + stats + ansi.reset;
+    const statsLen = stripAnsi(statsLine).length;
+    const statsPad = Math.max(0, innerWidth - 2 - statsLen);
+    lines.push(
+      "  " +
+        theme.border +
+        "│ " +
+        ansi.reset +
+        statsLine +
+        " ".repeat(statsPad) +
+        theme.border +
+        " │" +
+        ansi.reset,
+    );
+
+    // Line 3: model + delegation reason (if available)
+    const detailParts = [
+      card.model ? `model ${card.model}` : null,
+      card.delegationReason ? `reason ${card.delegationReason}` : null,
+    ].filter((x): x is string => Boolean(x));
+
+    if (detailParts.length > 0) {
+      const detailText =
+        "    " +
+        theme.textMuted +
+        truncate(detailParts.join(" · "), innerWidth - 4) +
+        ansi.reset;
+      const detailLen = stripAnsi(detailText).length;
+      const detailPad = Math.max(0, innerWidth - 2 - detailLen);
+      lines.push(
+        "  " +
+          theme.border +
+          "│ " +
+          ansi.reset +
+          detailText +
+          " ".repeat(detailPad) +
+          theme.border +
+          " │" +
+          ansi.reset,
+      );
+    }
+  }
+  lines.push(
+    "  " + theme.border + "└" + "─".repeat(innerWidth) + "┘" + ansi.reset,
+  );
+  return lines;
 }
