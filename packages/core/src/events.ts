@@ -46,12 +46,22 @@ export interface AssistantFailedEvent extends RuntimeEvent {
 
 export interface ThreadCreatedEvent extends RuntimeEvent {
   type: "thread.created";
-  payload: { parentSessionId: string; childSessionId: string; alias: string | null; task: string };
+  payload: {
+    parentSessionId: string;
+    childSessionId: string;
+    alias: string | null;
+    task: string;
+  };
 }
 
 export interface ThreadReusedEvent extends RuntimeEvent {
   type: "thread.reused";
-  payload: { parentSessionId: string; childSessionId: string; alias: string; task: string };
+  payload: {
+    parentSessionId: string;
+    childSessionId: string;
+    alias: string;
+    task: string;
+  };
 }
 
 export interface ThreadStartedEvent extends RuntimeEvent {
@@ -69,9 +79,34 @@ export interface ThreadFailedEvent extends RuntimeEvent {
   payload: { childSessionId: string; error: string };
 }
 
+export interface ThreadToolStartedEvent extends RuntimeEvent {
+  type: "thread.tool_started";
+  payload: { childSessionId: string; toolName: string; toolCallId: string };
+}
+
+export interface ThreadToolCompletedEvent extends RuntimeEvent {
+  type: "thread.tool_completed";
+  payload: {
+    childSessionId: string;
+    toolName: string;
+    toolCallId: string;
+    isError: boolean;
+  };
+}
+
+export interface ThreadActivityEvent extends RuntimeEvent {
+  type: "thread.activity";
+  payload: { childSessionId: string; activity: string };
+}
+
 export interface WorkerReturnCreatedEvent extends RuntimeEvent {
   type: "worker_return.created";
-  payload: { workerReturnId: string; parentSessionId: string; childSessionId: string; status: string };
+  payload: {
+    workerReturnId: string;
+    parentSessionId: string;
+    childSessionId: string;
+    status: string;
+  };
 }
 
 // ── Union ────────────────────────────────────────────────────────────
@@ -88,8 +123,10 @@ export type OpenSlateEvent =
   | ThreadStartedEvent
   | ThreadCompletedEvent
   | ThreadFailedEvent
+  | ThreadToolStartedEvent
+  | ThreadToolCompletedEvent
+  | ThreadActivityEvent
   | WorkerReturnCreatedEvent;
-
 export type OpenSlateEventType = OpenSlateEvent["type"];
 
 // ── Event Bus ────────────────────────────────────────────────────────
@@ -107,7 +144,9 @@ export function createEventBus(): EventBus {
   return {
     on(listener: EventListener): () => void {
       listeners.add(listener);
-      return () => { listeners.delete(listener); };
+      return () => {
+        listeners.delete(listener);
+      };
     },
 
     emit(event: OpenSlateEvent): void {
@@ -122,7 +161,10 @@ export function createEventBus(): EventBus {
   };
 }
 
-function makeEvent<T extends OpenSlateEvent>(type: T["type"], payload: T["payload"]): T {
+function makeEvent<T extends OpenSlateEvent>(
+  type: T["type"],
+  payload: T["payload"],
+): T {
   return { type, timestamp: new Date().toISOString(), payload } as T;
 }
 
@@ -132,38 +174,138 @@ export const RuntimeEvents = {
     return makeEvent<SessionCreatedEvent>("session.created", { sessionId });
   },
   sessionUpdated(sessionId: string, field: string): SessionUpdatedEvent {
-    return makeEvent<SessionUpdatedEvent>("session.updated", { sessionId, field });
+    return makeEvent<SessionUpdatedEvent>("session.updated", {
+      sessionId,
+      field,
+    });
   },
-  messageCreated(sessionId: string, messageId: string, role: string): MessageCreatedEvent {
-    return makeEvent<MessageCreatedEvent>("message.created", { sessionId, messageId, role });
+  messageCreated(
+    sessionId: string,
+    messageId: string,
+    role: string,
+  ): MessageCreatedEvent {
+    return makeEvent<MessageCreatedEvent>("message.created", {
+      sessionId,
+      messageId,
+      role,
+    });
   },
   assistantStarted(sessionId: string): AssistantStartedEvent {
     return makeEvent<AssistantStartedEvent>("assistant.started", { sessionId });
   },
-  assistantCompleted(sessionId: string, messageId: string): AssistantCompletedEvent {
-    return makeEvent<AssistantCompletedEvent>("assistant.completed", { sessionId, messageId });
+  assistantCompleted(
+    sessionId: string,
+    messageId: string,
+  ): AssistantCompletedEvent {
+    return makeEvent<AssistantCompletedEvent>("assistant.completed", {
+      sessionId,
+      messageId,
+    });
   },
-  assistantFailed(sessionId: string, messageId: string, error: string): AssistantFailedEvent {
-    return makeEvent<AssistantFailedEvent>("assistant.failed", { sessionId, messageId, error });
+  assistantFailed(
+    sessionId: string,
+    messageId: string,
+    error: string,
+  ): AssistantFailedEvent {
+    return makeEvent<AssistantFailedEvent>("assistant.failed", {
+      sessionId,
+      messageId,
+      error,
+    });
   },
 
   // Thread events
-  threadCreated(parentSessionId: string, childSessionId: string, alias: string | null, task: string): ThreadCreatedEvent {
-    return makeEvent<ThreadCreatedEvent>("thread.created", { parentSessionId, childSessionId, alias, task });
+  threadCreated(
+    parentSessionId: string,
+    childSessionId: string,
+    alias: string | null,
+    task: string,
+  ): ThreadCreatedEvent {
+    return makeEvent<ThreadCreatedEvent>("thread.created", {
+      parentSessionId,
+      childSessionId,
+      alias,
+      task,
+    });
   },
-  threadReused(parentSessionId: string, childSessionId: string, alias: string, task: string): ThreadReusedEvent {
-    return makeEvent<ThreadReusedEvent>("thread.reused", { parentSessionId, childSessionId, alias, task });
+  threadReused(
+    parentSessionId: string,
+    childSessionId: string,
+    alias: string,
+    task: string,
+  ): ThreadReusedEvent {
+    return makeEvent<ThreadReusedEvent>("thread.reused", {
+      parentSessionId,
+      childSessionId,
+      alias,
+      task,
+    });
   },
   threadStarted(childSessionId: string, task: string): ThreadStartedEvent {
-    return makeEvent<ThreadStartedEvent>("thread.started", { childSessionId, task });
+    return makeEvent<ThreadStartedEvent>("thread.started", {
+      childSessionId,
+      task,
+    });
   },
-  threadCompleted(childSessionId: string, workerReturnId: string): ThreadCompletedEvent {
-    return makeEvent<ThreadCompletedEvent>("thread.completed", { childSessionId, workerReturnId });
+  threadCompleted(
+    childSessionId: string,
+    workerReturnId: string,
+  ): ThreadCompletedEvent {
+    return makeEvent<ThreadCompletedEvent>("thread.completed", {
+      childSessionId,
+      workerReturnId,
+    });
   },
   threadFailed(childSessionId: string, error: string): ThreadFailedEvent {
-    return makeEvent<ThreadFailedEvent>("thread.failed", { childSessionId, error });
+    return makeEvent<ThreadFailedEvent>("thread.failed", {
+      childSessionId,
+      error,
+    });
   },
-  workerReturnCreated(workerReturnId: string, parentSessionId: string, childSessionId: string, status: string): WorkerReturnCreatedEvent {
-    return makeEvent<WorkerReturnCreatedEvent>("worker_return.created", { workerReturnId, parentSessionId, childSessionId, status });
+  threadToolStarted(
+    childSessionId: string,
+    toolName: string,
+    toolCallId: string,
+  ): ThreadToolStartedEvent {
+    return makeEvent<ThreadToolStartedEvent>("thread.tool_started", {
+      childSessionId,
+      toolName,
+      toolCallId,
+    });
+  },
+  threadToolCompleted(
+    childSessionId: string,
+    toolName: string,
+    toolCallId: string,
+    isError: boolean,
+  ): ThreadToolCompletedEvent {
+    return makeEvent<ThreadToolCompletedEvent>("thread.tool_completed", {
+      childSessionId,
+      toolName,
+      toolCallId,
+      isError,
+    });
+  },
+  threadActivity(
+    childSessionId: string,
+    activity: string,
+  ): ThreadActivityEvent {
+    return makeEvent<ThreadActivityEvent>("thread.activity", {
+      childSessionId,
+      activity,
+    });
+  },
+  workerReturnCreated(
+    workerReturnId: string,
+    parentSessionId: string,
+    childSessionId: string,
+    status: string,
+  ): WorkerReturnCreatedEvent {
+    return makeEvent<WorkerReturnCreatedEvent>("worker_return.created", {
+      workerReturnId,
+      parentSessionId,
+      childSessionId,
+      status,
+    });
   },
 };
