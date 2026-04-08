@@ -4,10 +4,21 @@ import { createSessionStore } from "./storage/session-store.js";
 import { createMessageStore } from "./storage/message-store.js";
 import { createWorkerReturnStore } from "./storage/worker-return-store.js";
 import { createEventBus, RuntimeEvents } from "./events.js";
-import { createOrchestratorService, parseDelegations } from "./orchestrator-service.js";
+import {
+  createOrchestratorService,
+  parseDelegations,
+} from "./orchestrator-service.js";
 import { createThreadService } from "./thread-service.js";
-import type { ModelCallFn, ModelCallInput, ModelCallResult } from "./session-service.js";
-import type { ThreadService, SpawnThreadInput, SpawnThreadResult } from "./thread-service.js";
+import type {
+  ModelCallFn,
+  ModelCallInput,
+  ModelCallResult,
+} from "./session-service.js";
+import type {
+  ThreadService,
+  SpawnThreadInput,
+  SpawnThreadResult,
+} from "./thread-service.js";
 import type { SessionStore } from "./storage/session-store.js";
 import type { MessageStore } from "./storage/message-store.js";
 import type { WorkerReturnStore } from "./storage/worker-return-store.js";
@@ -39,7 +50,10 @@ function mockModelCallFn(response: string): ModelCallFn {
   });
 }
 
-function mockDelegatingModelCallFn(phase1Text: string, phase2Text: string): ModelCallFn {
+function mockDelegatingModelCallFn(
+  phase1Text: string,
+  phase2Text: string,
+): ModelCallFn {
   let callCount = 0;
   return async (_input: ModelCallInput): Promise<ModelCallResult> => {
     callCount++;
@@ -105,13 +119,9 @@ describe("parseDelegations", () => {
   });
 
   test("handles malformed JSON gracefully", () => {
-    const text = [
-      "Before",
-      "```delegate",
-      "{not valid}",
-      "```",
-      "After",
-    ].join("\n");
+    const text = ["Before", "```delegate", "{not valid}", "```", "After"].join(
+      "\n",
+    );
 
     const parsed = parseDelegations(text);
 
@@ -137,17 +147,23 @@ describe("OrchestratorService", () => {
     const result = await orchestrator.sendMessage(parent.id, "Hello");
 
     expect(result.threadRuns).toEqual([]);
-    expect(result.assistantMessage.parts[0]).toEqual({ kind: "text", content: "Direct answer" });
+    expect(result.assistantMessage.parts[0]).toEqual({
+      kind: "text",
+      content: "Direct answer",
+    });
 
     const persisted = messageStore.listBySession(parent.id);
     expect(persisted.map((m) => m.role)).toEqual(["user", "assistant"]);
-    expect((persisted[0]?.parts[0] as { kind: string; content: string }).content).toBe("Hello");
+    expect(
+      (persisted[0]?.parts[0] as { kind: string; content: string }).content,
+    ).toBe("Hello");
   });
 
   test("sendMessage with delegation spawns threads and synthesizes", async () => {
     const parent = sessionStore.create({ kind: "primary" });
 
-    const phase1 = 'Let me delegate.\n```delegate\n[{"alias":"reader","task":"read stuff"}]\n```';
+    const phase1 =
+      'Let me delegate.\n```delegate\n[{"alias":"reader","task":"read stuff"}]\n```';
     const phase2 = "Here is the synthesis based on thread results.";
 
     const orchestrator = createOrchestratorService({
@@ -158,18 +174,25 @@ describe("OrchestratorService", () => {
       threadService: mockThreadService(),
     });
 
-    const result = await orchestrator.sendMessage(parent.id, "Do something complex");
+    const result = await orchestrator.sendMessage(
+      parent.id,
+      "Do something complex",
+    );
 
     expect(result.threadRuns).toHaveLength(1);
     expect(result.threadRuns[0]?.status).toBe("completed");
     expect(result.threadRuns[0]?.alias).toBe("reader");
-    expect(result.assistantMessage.parts[0]).toEqual({ kind: "text", content: phase2 });
+    expect(result.assistantMessage.parts[0]).toEqual({
+      kind: "text",
+      content: phase2,
+    });
   });
 
   test("strips delegate blocks from final synthesis response", async () => {
     const parent = sessionStore.create({ kind: "primary" });
 
-    const phase1 = 'Delegating\n```delegate\n[{"alias":"reader","task":"read stuff"}]\n```';
+    const phase1 =
+      'Delegating\n```delegate\n[{"alias":"reader","task":"read stuff"}]\n```';
     const phase2 = [
       "Synthesizing from child output.",
       "```delegate",
@@ -185,10 +208,15 @@ describe("OrchestratorService", () => {
       threadService: mockThreadService(),
     });
 
-    const result = await orchestrator.sendMessage(parent.id, "Do something complex");
+    const result = await orchestrator.sendMessage(
+      parent.id,
+      "Do something complex",
+    );
 
     expect(result.threadRuns).toHaveLength(1);
-    const finalText = (result.assistantMessage.parts[0] as { kind: string; content: string }).content;
+    const finalText = (
+      result.assistantMessage.parts[0] as { kind: string; content: string }
+    ).content;
     expect(finalText).toContain("Synthesizing from child output.");
     expect(finalText).not.toContain("```delegate");
     expect(finalText).not.toContain("should-not-run");
@@ -212,7 +240,8 @@ describe("OrchestratorService", () => {
       },
     };
 
-    const phase1 = 'Delegating\n```delegate\n[{"alias":"broken","task":"will fail"}]\n```';
+    const phase1 =
+      'Delegating\n```delegate\n[{"alias":"broken","task":"will fail"}]\n```';
     const phase2 = "Synthesis despite failure.";
 
     const orchestrator = createOrchestratorService({
@@ -228,23 +257,30 @@ describe("OrchestratorService", () => {
     expect(result.threadRuns).toHaveLength(1);
     expect(result.threadRuns[0]?.status).toBe("aborted");
     expect(result.threadRuns[0]?.output).toContain("Thread crashed");
-    expect(result.assistantMessage.parts[0]).toEqual({ kind: "text", content: phase2 });
+    expect(result.assistantMessage.parts[0]).toEqual({
+      kind: "text",
+      content: phase2,
+    });
   });
 
   test("alias reuse works through orchestrator path", async () => {
     const parent = sessionStore.create({ kind: "primary" });
 
     let callCount = 0;
-    const aliasReuseModel: ModelCallFn = async (_input: ModelCallInput): Promise<ModelCallResult> => {
+    const aliasReuseModel: ModelCallFn = async (
+      _input: ModelCallInput,
+    ): Promise<ModelCallResult> => {
       callCount++;
       const isPhase1 = callCount % 2 === 1;
       return {
-        parts: [{
-          kind: "text",
-          content: isPhase1
-            ? 'Delegating\n```delegate\n[{"alias":"worker-a","task":"do work"}]\n```'
-            : "Synthesis complete.",
-        }],
+        parts: [
+          {
+            kind: "text",
+            content: isPhase1
+              ? 'Delegating\n```delegate\n[{"alias":"worker-a","task":"do work"}]\n```'
+              : "Synthesis complete.",
+          },
+        ],
         usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
       };
     };
@@ -263,10 +299,12 @@ describe("OrchestratorService", () => {
     expect(first.threadRuns).toHaveLength(1);
     expect(second.threadRuns).toHaveLength(1);
     expect(second.threadRuns[0]?.reused).toBe(true);
-    expect(second.threadRuns[0]?.childSessionId).toBe(first.threadRuns[0]?.childSessionId);
+    expect(second.threadRuns[0]?.childSessionId).toBe(
+      first.threadRuns[0]?.childSessionId,
+    );
   });
 
-  test("bounds delegations to two child threads", async () => {
+  test("bounds delegations to max child threads", async () => {
     const parent = sessionStore.create({ kind: "primary" });
 
     let phase = 0;
@@ -274,15 +312,17 @@ describe("OrchestratorService", () => {
       phase += 1;
       if (phase === 1) {
         return {
-          parts: [{
-            kind: "text",
-            content: [
-              "Delegating",
-              "```delegate",
-              '[{"alias":"one","task":"task one"},{"alias":"two","task":"task two"},{"alias":"three","task":"task three"}]',
-              "```",
-            ].join("\n"),
-          }],
+          parts: [
+            {
+              kind: "text",
+              content: [
+                "Delegating",
+                "```delegate",
+                '[{"alias":"one","task":"task one"},{"alias":"two","task":"task two"},{"alias":"three","task":"task three"}]',
+                "```",
+              ].join("\n"),
+            },
+          ],
           usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
         };
       }
@@ -297,7 +337,11 @@ describe("OrchestratorService", () => {
     const fakeThreadService: ThreadService = {
       async spawnAndRun(input: SpawnThreadInput): Promise<SpawnThreadResult> {
         calls.push(input);
-        const child = sessionStore.create({ kind: "thread", parentId: parent.id, alias: input.alias });
+        const child = sessionStore.create({
+          kind: "thread",
+          parentId: parent.id,
+          alias: input.alias,
+        });
         return {
           childSession: child,
           reused: false,
@@ -335,9 +379,10 @@ describe("OrchestratorService", () => {
 
     const result = await orchestrator.sendMessage(parent.id, "Do a broad scan");
 
-    expect(result.threadRuns).toHaveLength(2);
-    expect(calls).toHaveLength(2);
+    expect(result.threadRuns).toHaveLength(3);
+    expect(calls).toHaveLength(3);
     expect(calls[0]?.alias).toBe("one");
     expect(calls[1]?.alias).toBe("two");
+    expect(calls[2]?.alias).toBe("three");
   });
 });
