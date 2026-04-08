@@ -345,7 +345,7 @@ export function createServer(
 
     async stop(): Promise<void> {
       if (server) {
-        server.stop();
+        server.stop(true);
         server = null;
         console.log("[openslate] server stopped");
       }

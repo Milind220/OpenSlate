@@ -83,6 +83,8 @@ export class SessionView {
   private suspended = false;
   private orchestrating = false;
   private renderTimer: ReturnType<typeof setInterval> | null = null;
+  private eventSubscriptionAbort: AbortController | null = null;
+  private eventRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Live SSE state
   private knownChildIds = new Set<string>();
@@ -110,6 +112,8 @@ export class SessionView {
 
     this.render();
 
+    const wasRaw = process.stdin.isTTY && (process.stdin as any).isRaw;
+
     await new Promise<void>((resolve) => {
       const onData = (data: string | Buffer) => {
         if (this.suspended) return;
@@ -124,6 +128,9 @@ export class SessionView {
         process.stdin.removeListener("data", onData);
         if (this.renderTimer) clearInterval(this.renderTimer);
         this.renderTimer = null;
+        this.stopEventSubscription();
+        if (process.stdin.isTTY) process.stdin.setRawMode(!!wasRaw);
+        process.stdin.pause();
       };
 
       process.stdin.on("data", onData);
@@ -626,18 +633,38 @@ export class SessionView {
   // ── SSE Event Subscription ────────────────────────────────────────
 
   private startEventSubscription(): void {
+    this.stopEventSubscription();
+    const controller = new AbortController();
+    this.eventSubscriptionAbort = controller;
+
     const loop = async () => {
       try {
-        for await (const event of this.client.subscribe()) {
+        for await (const event of this.client.subscribe(controller.signal)) {
           if (!this.running) break;
           this.handleEvent(event);
         }
       } catch {
         // SSE lost; best-effort retry
-        if (this.running) setTimeout(() => this.startEventSubscription(), 3000);
+        if (this.running && !controller.signal.aborted) {
+          this.eventRetryTimer = setTimeout(() => {
+            this.eventRetryTimer = null;
+            if (this.running) this.startEventSubscription();
+          }, 3000);
+        }
       }
     };
-    loop();
+    void loop();
+  }
+
+  private stopEventSubscription(): void {
+    if (this.eventRetryTimer) {
+      clearTimeout(this.eventRetryTimer);
+      this.eventRetryTimer = null;
+    }
+    if (this.eventSubscriptionAbort) {
+      this.eventSubscriptionAbort.abort();
+      this.eventSubscriptionAbort = null;
+    }
   }
 
   private handleEvent(event: OpenSlateEvent): void {

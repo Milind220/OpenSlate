@@ -166,6 +166,19 @@ export function createRuntimeConfigService(
     return safeParseModelAssignments(row?.models_json ?? null);
   };
 
+  // Fireworks model IDs for specific roles
+  const FIREWORKS_DEFAULTS: Record<RuntimeRole, string> = {
+    primary: "accounts/fireworks/models/glm-5",
+    execute: "accounts/fireworks/routers/kimi-k2p5-turbo",
+    explore: "accounts/fireworks/routers/kimi-k2p5-turbo",
+    search: "accounts/fireworks/models/minimax-m2p5",
+    compress: "accounts/fireworks/routers/kimi-k2p5-turbo",
+  };
+
+  const pickFireworksDefault = (role: RuntimeRole): RuntimeModelSelection => {
+    return { provider: "fireworks", model: FIREWORKS_DEFAULTS[role] };
+  };
+
   const pickDefaultSelection = (): RuntimeModelSelection => {
     const providers = registry.list();
     const withCredentials = providers.find((p) => {
@@ -213,18 +226,48 @@ export function createRuntimeConfigService(
     };
   };
 
+  // Old default model IDs that should be migrated to new Fireworks defaults
+  const OLD_DEFAULT_MODELS = new Set([
+    "accounts/fireworks/models/deepseek-v3",
+    "accounts/fireworks/models/deepseek-v3.1",
+  ]);
+
+  const isOldDefault = (selection: RuntimeModelSelection): boolean => {
+    return (
+      selection.provider === "fireworks" &&
+      OLD_DEFAULT_MODELS.has(selection.model)
+    );
+  };
+
   const resolveAssignments = (
     persisted: Partial<Record<RuntimeRole, RuntimeModelSelection>>,
     explicit?: ModelRouterConfig,
   ): Record<RuntimeRole, RuntimeModelSelection> => {
     const fallback = pickDefaultSelection();
 
+    // Check if Fireworks is available
+    const providers = registry.list();
+    const fireworksAvailable = providers.some(
+      (p) => p.id === "fireworks" && Object.keys(p.models).length > 0
+    );
+
+    // Use Fireworks-specific defaults if available, otherwise use generic fallback
     const resolved: Record<RuntimeRole, RuntimeModelSelection> = {
-      primary: fallback,
-      execute: fallback,
-      explore: fallback,
-      search: fallback,
-      compress: fallback,
+      primary: fireworksAvailable
+        ? pickFireworksDefault("primary")
+        : fallback,
+      execute: fireworksAvailable
+        ? pickFireworksDefault("execute")
+        : fallback,
+      explore: fireworksAvailable
+        ? pickFireworksDefault("explore")
+        : fallback,
+      search: fireworksAvailable
+        ? pickFireworksDefault("search")
+        : fallback,
+      compress: fireworksAvailable
+        ? pickFireworksDefault("compress")
+        : fallback,
     };
 
     if (explicit) {
@@ -243,6 +286,13 @@ export function createRuntimeConfigService(
     for (const role of RUNTIME_ROLES) {
       const value = persisted[role];
       if (!value) continue;
+
+      // If Fireworks is available and the persisted value is an old default,
+      // skip it to use the new Fireworks default instead (migration)
+      if (fireworksAvailable && isOldDefault(value)) {
+        continue;
+      }
+
       resolved[role] = validateSelection(role, value);
     }
 

@@ -63,6 +63,10 @@ export class App {
   }
 
   private restoreTerminal(): void {
+    if (process.stdin.isTTY && (process.stdin as any).isRaw) {
+      process.stdin.setRawMode(false);
+    }
+    process.stdin.pause();
     write(ansi.showCursor);
     write(ansi.resetScroll);
     // Restore main screen buffer

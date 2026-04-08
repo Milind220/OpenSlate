@@ -116,7 +116,7 @@ export interface OpenSlateClient {
     childSessionId: SessionId,
   ): Promise<Message[]>;
 
-  subscribe(): AsyncIterable<OpenSlateEvent>;
+  subscribe(signal?: AbortSignal): AsyncIterable<OpenSlateEvent>;
 }
 // ── Implementation ───────────────────────────────────────────────────
 
@@ -227,17 +227,28 @@ export function createClient(config: OpenSlateClientConfig): OpenSlateClient {
       );
     },
 
-    async *subscribe(): AsyncGenerator<OpenSlateEvent> {
-      const res = await fetch(base + "/events", { headers: headers() });
+    async *subscribe(signal?: AbortSignal): AsyncGenerator<OpenSlateEvent> {
+      const res = await fetch(base + "/events", {
+        headers: headers(),
+        signal,
+      });
       if (!res.ok || !res.body) {
         throw new Error("Failed to connect to event stream");
       }
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      const onAbort = () => {
+        void reader.cancel().catch(() => {
+          // best-effort cancellation
+        });
+      };
+
+      signal?.addEventListener("abort", onAbort, { once: true });
 
       try {
         while (true) {
+          if (signal?.aborted) break;
           const { done, value } = await reader.read();
           if (done) break;
 
@@ -257,6 +268,12 @@ export function createClient(config: OpenSlateClientConfig): OpenSlateClient {
           }
         }
       } finally {
+        signal?.removeEventListener("abort", onAbort);
+        try {
+          await reader.cancel();
+        } catch {
+          // already closed
+        }
         reader.releaseLock();
       }
     },
