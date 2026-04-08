@@ -39,9 +39,9 @@ export interface OpenSlateClient {
   health(): Promise<{ ok: boolean; timestamp: string }>;
   createSession(options?: { title?: string; projectId?: string }): Promise<Session>;
   getSession(id: SessionId): Promise<Session>;
+  listSessions(): Promise<Session[]>;
   getMessages(sessionId: SessionId): Promise<Message[]>;
   sendMessage(sessionId: SessionId, content: string): Promise<SendMessageResponse>;
-
   /** Spawn or reuse a child thread. */
   spawnThread(parentSessionId: SessionId, options: {
     task: string;
@@ -102,10 +102,13 @@ export function createClient(config: OpenSlateClientConfig): OpenSlateClient {
       return request("/sessions/" + id);
     },
 
+    listSessions() {
+      return request("/sessions");
+    },
+
     getMessages(sessionId) {
       return request("/sessions/" + sessionId + "/messages");
     },
-
     sendMessage(sessionId, content) {
       return request("/sessions/" + sessionId + "/messages", {
         method: "POST",
