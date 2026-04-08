@@ -33,9 +33,9 @@ export type MessagePartKind =
   | "handoff"
   | "summary_marker"
   | "worker_return_ref"
+  | "delegation_plan"
   | "approval_request"
   | "approval_result";
-
 /**
  * Base shape for all message parts.
  * Each part is typed by its kind discriminant.
@@ -105,13 +105,29 @@ export interface WorkerReturnRefPart extends MessagePartBase {
   workerReturnId: string;
 }
 
+export interface DelegationPlanPart extends MessagePartBase {
+  kind: "delegation_plan";
+  planId: string;
+  policy: {
+    maxThreadsPerTurn: number;
+    childMaxIterations: number;
+    defaultCapabilities: string[];
+  };
+  entries: Array<{
+    alias: string;
+    task: string;
+    reason: string | null;
+    expectedOutput: string | null;
+    capabilities: string[];
+  }>;
+}
+
 export interface ApprovalRequestPart extends MessagePartBase {
   kind: "approval_request";
   toolCallId: string;
   toolName: string;
   description: string;
 }
-
 export interface ApprovalResultPart extends MessagePartBase {
   kind: "approval_result";
   toolCallId: string;
@@ -130,5 +146,6 @@ export type MessagePart =
   | HandoffPart
   | SummaryMarkerPart
   | WorkerReturnRefPart
+  | DelegationPlanPart
   | ApprovalRequestPart
   | ApprovalResultPart;
