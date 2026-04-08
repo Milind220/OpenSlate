@@ -9,4 +9,5 @@ export type {
   OpenSlateClientConfig,
   OpenSlateClient,
   SendMessageResponse,
+  OrchestrateResponse,
 } from "./client.js";

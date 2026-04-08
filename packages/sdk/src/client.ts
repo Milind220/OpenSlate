@@ -3,7 +3,7 @@
  * Phase 4: adds thread, children, and worker-return methods.
  */
 
-import type { Session, SessionId, Message, WorkerReturn } from "@openslate/core";
+import type { Session, SessionId, Message, WorkerReturn, ThreadRunCard } from "@openslate/core";
 import type { OpenSlateEvent } from "@openslate/core";
 
 // ── Config ───────────────────────────────────────────────────────────
@@ -25,12 +25,22 @@ export interface SendMessageResponse {
   } | null;
 }
 
+export interface OrchestrateResponse {
+  userMessage: Message;
+  assistantMessage: Message;
+  threadRuns: ThreadRunCard[];
+  usage: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  } | null;
+}
+
 export interface SpawnThreadResponse {
   childSession: Session;
   workerReturn: WorkerReturn;
   reused: boolean;
 }
-
 // ── Client Interface ─────────────────────────────────────────────────
 
 export interface OpenSlateClient {
@@ -42,6 +52,8 @@ export interface OpenSlateClient {
   listSessions(): Promise<Session[]>;
   getMessages(sessionId: SessionId): Promise<Message[]>;
   sendMessage(sessionId: SessionId, content: string): Promise<SendMessageResponse>;
+  /** Send a message through the orchestrator (automatic delegation). */
+  orchestrate(sessionId: SessionId, content: string): Promise<OrchestrateResponse>;
   /** Spawn or reuse a child thread. */
   spawnThread(parentSessionId: SessionId, options: {
     task: string;
@@ -111,6 +123,13 @@ export function createClient(config: OpenSlateClientConfig): OpenSlateClient {
     },
     sendMessage(sessionId, content) {
       return request("/sessions/" + sessionId + "/messages", {
+        method: "POST",
+        body: JSON.stringify({ content }),
+      });
+    },
+
+    orchestrate(sessionId, content) {
+      return request("/sessions/" + sessionId + "/orchestrate", {
         method: "POST",
         body: JSON.stringify({ content }),
       });
