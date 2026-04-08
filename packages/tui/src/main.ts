@@ -4,8 +4,8 @@
  * Boots the server in-process and launches the terminal UI.
  */
 
-import { bootstrap } from "@openslate/server";
-import { createClient } from "@openslate/sdk";
+import { bootstrap } from "../../server/src/index.js";
+import { createClient } from "../../sdk/src/index.js";
 import { App } from "./app.js";
 
 async function main() {
