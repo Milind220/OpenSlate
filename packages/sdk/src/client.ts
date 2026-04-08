@@ -3,9 +3,15 @@
  * Phase 4: adds thread, children, and worker-return methods.
  */
 
-import type { Session, SessionId, Message, WorkerReturn, ThreadRunCard } from "@openslate/core";
+import type {
+  Session,
+  SessionId,
+  Message,
+  WorkerReturn,
+  ThreadRunCard,
+  DelegationPlan,
+} from "@openslate/core";
 import type { OpenSlateEvent } from "@openslate/core";
-
 // ── Config ───────────────────────────────────────────────────────────
 
 export interface OpenSlateClientConfig {
@@ -29,37 +35,62 @@ export interface OrchestrateResponse {
   userMessage: Message;
   assistantMessage: Message;
   threadRuns: ThreadRunCard[];
+  delegationPlan: DelegationPlan | null;
   usage: {
     promptTokens: number;
     completionTokens: number;
     totalTokens: number;
   } | null;
 }
-
 export interface SpawnThreadResponse {
   childSession: Session;
   workerReturn: WorkerReturn;
   reused: boolean;
 }
-// ── Client Interface ─────────────────────────────────────────────────
 
+export interface AppConfig {
+  providers: Record<
+    string,
+    { configured: boolean; authType: "api_key" | "oauth" | "none" }
+  >;
+  models: {
+    primary: { provider: string; model: string } | null;
+    execute: { provider: string; model: string } | null;
+    explore: { provider: string; model: string } | null;
+    search: { provider: string; model: string } | null;
+    compress: { provider: string; model: string } | null;
+  };
+}
+
+// ── Client Interface ─────────────────────────────────────────────────
 export interface OpenSlateClient {
   readonly config: OpenSlateClientConfig;
-
   health(): Promise<{ ok: boolean; timestamp: string }>;
-  createSession(options?: { title?: string; projectId?: string }): Promise<Session>;
+  createSession(options?: {
+    title?: string;
+    projectId?: string;
+  }): Promise<Session>;
   getSession(id: SessionId): Promise<Session>;
   listSessions(): Promise<Session[]>;
   getMessages(sessionId: SessionId): Promise<Message[]>;
-  sendMessage(sessionId: SessionId, content: string): Promise<SendMessageResponse>;
+  sendMessage(
+    sessionId: SessionId,
+    content: string,
+  ): Promise<SendMessageResponse>;
   /** Send a message through the orchestrator (automatic delegation). */
-  orchestrate(sessionId: SessionId, content: string): Promise<OrchestrateResponse>;
+  orchestrate(
+    sessionId: SessionId,
+    content: string,
+  ): Promise<OrchestrateResponse>;
   /** Spawn or reuse a child thread. */
-  spawnThread(parentSessionId: SessionId, options: {
-    task: string;
-    alias?: string;
-    capabilities?: string[];
-  }): Promise<SpawnThreadResponse>;
+  spawnThread(
+    parentSessionId: SessionId,
+    options: {
+      task: string;
+      alias?: string;
+      capabilities?: string[];
+    },
+  ): Promise<SpawnThreadResponse>;
 
   /** List child sessions for a parent. */
   listChildren(parentSessionId: SessionId): Promise<Session[]>;
@@ -70,9 +101,23 @@ export interface OpenSlateClient {
   /** Get a specific worker return. */
   getWorkerReturn(id: string): Promise<WorkerReturn>;
 
+  /** Get app configuration. */
+  getConfig(): Promise<AppConfig>;
+  /** Update app configuration. */
+  setConfig(config: Partial<AppConfig>): Promise<AppConfig>;
+  /** Login to a provider with API key. */
+  login(
+    provider: string,
+    apiKey: string,
+  ): Promise<{ ok: boolean; provider: string }>;
+  /** Get messages for a specific child session. */
+  getChildMessages(
+    parentSessionId: SessionId,
+    childSessionId: SessionId,
+  ): Promise<Message[]>;
+
   subscribe(): AsyncIterable<OpenSlateEvent>;
 }
-
 // ── Implementation ───────────────────────────────────────────────────
 
 export function createClient(config: OpenSlateClientConfig): OpenSlateClient {
@@ -154,12 +199,39 @@ export function createClient(config: OpenSlateClientConfig): OpenSlateClient {
       return request("/worker-returns/" + id);
     },
 
+    getConfig() {
+      return request("/config");
+    },
+
+    setConfig(config) {
+      return request("/config", {
+        method: "POST",
+        body: JSON.stringify(config),
+      });
+    },
+
+    login(provider, apiKey) {
+      return request("/login", {
+        method: "POST",
+        body: JSON.stringify({ provider, apiKey }),
+      });
+    },
+
+    getChildMessages(parentSessionId, childSessionId) {
+      return request(
+        "/sessions/" +
+          parentSessionId +
+          "/children/" +
+          childSessionId +
+          "/messages",
+      );
+    },
+
     async *subscribe(): AsyncGenerator<OpenSlateEvent> {
       const res = await fetch(base + "/events", { headers: headers() });
       if (!res.ok || !res.body) {
         throw new Error("Failed to connect to event stream");
       }
-
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
