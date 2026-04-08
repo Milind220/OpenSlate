@@ -33,7 +33,14 @@ export interface ChildToolResult {
 }
 
 export interface ChildModelCallInput {
-  messages: Array<{ role: string; content: string; toolCallId?: string; toolCalls?: ChildToolCall[] }>;
+  messages: Array<{
+    role: string;
+    content: string;
+    toolCallId?: string;
+    toolName?: string;
+    isError?: boolean;
+    toolCalls?: ChildToolCall[];
+  }>;
   system?: string;
   tools?: Record<string, { description: string; parameters: Record<string, unknown> }>;
 }
@@ -198,6 +205,8 @@ interface ModelMessage {
   role: string;
   content: string;
   toolCallId?: string;
+  toolName?: string;
+  isError?: boolean;
   toolCalls?: ChildToolCall[];
 }
 
@@ -212,6 +221,8 @@ function buildModelMessages(messages: Array<{ role: string; parts: MessagePart[]
             role: "tool",
             content: part.content,
             toolCallId: part.toolCallId,
+            toolName: part.toolName,
+            isError: part.isError,
           });
         }
       }

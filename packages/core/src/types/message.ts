@@ -64,6 +64,7 @@ export interface ToolCallPart extends MessagePartBase {
 export interface ToolResultPart extends MessagePartBase {
   kind: "tool_result";
   toolCallId: string;
+  toolName: string;
   content: string;
   isError: boolean;
 }
