@@ -72,6 +72,11 @@ export function createServer(config: ServerConfig, deps: ServerDeps): OpenSlateS
         return json(session, 201);
       }
 
+      // GET /sessions
+      if (method === "GET" && path === "/sessions") {
+        return json(deps.sessionService.listSessions());
+      }
+
       // GET /sessions/:id
       const sessionMatch = path.match(/^\/sessions\/([^\/]+)$/);
       if (method === "GET" && sessionMatch) {
@@ -100,6 +105,7 @@ export function createServer(config: ServerConfig, deps: ServerDeps): OpenSlateS
         if (typeof content !== "string" || !content.trim()) {
           return errorResponse("Missing or empty 'content' field");
         }
+
         const result = await sessionService.sendMessage(sessionId, content);
         return json({
           userMessage: result.userMessage,
@@ -109,7 +115,6 @@ export function createServer(config: ServerConfig, deps: ServerDeps): OpenSlateS
       }
 
       // ── Thread Routes ────────────────────────────────────────────
-
       // POST /sessions/:id/threads — spawn or reuse a child thread
       const threadsPostMatch = path.match(/^\/sessions\/([^\/]+)\/threads$/);
       if (method === "POST" && threadsPostMatch) {
