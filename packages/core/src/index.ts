@@ -131,3 +131,12 @@ export type {
   ThreadServiceDeps,
 } from "./thread-service.js";
 
+// ── Orchestrator Service ─────────────────────────────────────────────
+
+export { createOrchestratorService, parseDelegations } from "./orchestrator-service.js";
+export type {
+  ThreadRunCard,
+  OrchestratorResult,
+  OrchestratorService,
+  OrchestratorServiceDeps,
+} from "./orchestrator-service.js";
