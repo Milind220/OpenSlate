@@ -6,14 +6,23 @@
 import * as readline from "readline";
 import type { OpenSlateClient } from "@openslate/sdk";
 import type { Session, SessionId } from "@openslate/core";
-import { ansi, theme, getTerminalSize, writeln, write, horizontalRule, statusBadge } from "./renderer.js";
+import {
+  ansi,
+  theme,
+  getTerminalSize,
+  writeln,
+  write,
+  horizontalRule,
+  statusBadge,
+} from "./renderer.js";
 import { HomeView } from "./views/home.js";
 import { SessionView } from "./views/session.js";
+import { SubagentDetailView } from "./views/subagent-detail.js";
 
 export type Route =
   | { type: "home" }
-  | { type: "session"; sessionId: SessionId };
-
+  | { type: "session"; sessionId: SessionId }
+  | { type: "subagent"; sessionId: SessionId; childSessionId: SessionId };
 export class App {
   private client: OpenSlateClient;
   private route: Route = { type: "home" };
@@ -32,8 +41,13 @@ export class App {
       while (this.running) {
         if (this.route.type === "home") {
           await this.runHome();
-        } else {
+        } else if (this.route.type === "session") {
           await this.runSession(this.route.sessionId);
+        } else {
+          await this.runSubagent(
+            this.route.sessionId,
+            this.route.childSessionId,
+          );
         }
       }
     } finally {
@@ -77,8 +91,20 @@ export class App {
     await view.run();
   }
 
-  // ── Prompt Helper ────────────────────────────────────────────────
+  private async runSubagent(
+    sessionId: SessionId,
+    childSessionId: SessionId,
+  ): Promise<void> {
+    const view = new SubagentDetailView(
+      this.client,
+      this,
+      sessionId,
+      childSessionId,
+    );
+    await view.run();
+  }
 
+  // ── Prompt Helper ────────────────────────────────────────────────
   async prompt(promptText: string): Promise<string> {
     write(ansi.showCursor);
     return new Promise<string>((resolve) => {
