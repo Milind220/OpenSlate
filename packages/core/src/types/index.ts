@@ -30,23 +30,20 @@ export type {
   HandoffPart,
   SummaryMarkerPart,
   WorkerReturnRefPart,
+  DelegationPlanPart,
   ApprovalRequestPart,
   ApprovalResultPart,
   MessagePart,
 } from "./message.js";
+export type { ArtifactKind, Artifact } from "./artifact.js";
 
-export type {
-  ArtifactKind,
-  Artifact,
-} from "./artifact.js";
-
-export type {
-  HandoffKind,
-  HandoffState,
-} from "./handoff.js";
+export type { HandoffKind, HandoffState } from "./handoff.js";
 
 export type {
   WorkerReturnStatus,
   ChildType,
+  ToolCallSummary,
+  CompletionContractValidity,
+  CompletionContractSignal,
   WorkerReturn,
 } from "./worker-return.js";

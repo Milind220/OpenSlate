@@ -5,8 +5,6 @@
  * Provider-agnostic — no model or provider specifics leak here.
  */
 
-// ── Types ────────────────────────────────────────────────────────────
-
 export type {
   SessionId,
   ProjectId,
@@ -35,28 +33,24 @@ export type {
   HandoffPart,
   SummaryMarkerPart,
   WorkerReturnRefPart,
+  DelegationPlanPart,
   ApprovalRequestPart,
   ApprovalResultPart,
   MessagePart,
 } from "./types/index.js";
 
-export type {
-  ArtifactKind,
-  Artifact,
-} from "./types/index.js";
+export type { ArtifactKind, Artifact } from "./types/index.js";
 
-export type {
-  HandoffKind,
-  HandoffState,
-} from "./types/index.js";
+export type { HandoffKind, HandoffState } from "./types/index.js";
 
 export type {
   WorkerReturnStatus,
   ChildType,
+  ToolCallSummary,
+  CompletionContractValidity,
+  CompletionContractSignal,
   WorkerReturn,
 } from "./types/index.js";
-
-// ── Storage ──────────────────────────────────────────────────────────
 
 export { initDatabase } from "./storage/index.js";
 export { createSessionStore } from "./storage/index.js";
@@ -64,9 +58,10 @@ export type { SessionStore, CreateSessionInput } from "./storage/index.js";
 export { createMessageStore } from "./storage/index.js";
 export type { MessageStore, AppendMessageInput } from "./storage/index.js";
 export { createWorkerReturnStore } from "./storage/index.js";
-export type { WorkerReturnStore, CreateWorkerReturnInput } from "./storage/index.js";
-
-// ── Events ───────────────────────────────────────────────────────────
+export type {
+  WorkerReturnStore,
+  CreateWorkerReturnInput,
+} from "./storage/index.js";
 
 export { createEventBus, RuntimeEvents } from "./events.js";
 export type {
@@ -82,14 +77,15 @@ export type {
   ThreadStartedEvent,
   ThreadCompletedEvent,
   ThreadFailedEvent,
+  ThreadToolStartedEvent,
+  ThreadToolCompletedEvent,
+  ThreadActivityEvent,
   WorkerReturnCreatedEvent,
   OpenSlateEvent,
   OpenSlateEventType,
   EventListener,
   EventBus,
 } from "./events.js";
-
-// ── Session Service ──────────────────────────────────────────────────
 
 export { createSessionService } from "./session-service.js";
 export type {
@@ -101,12 +97,11 @@ export type {
   SessionServiceDeps,
 } from "./session-service.js";
 
-// ── Model Adapter ────────────────────────────────────────────────────
-
-export { createModelCallAdapter, createChildModelCallAdapter } from "./model-adapter.js";
+export {
+  createModelCallAdapter,
+  createChildModelCallAdapter,
+} from "./model-adapter.js";
 export type { CompleteFn, ChildCompleteFn } from "./model-adapter.js";
-
-// ── Child Runtime ────────────────────────────────────────────────────
 
 export { runChildLoop } from "./child-runtime.js";
 export type {
@@ -121,8 +116,6 @@ export type {
   ChildRunResult,
 } from "./child-runtime.js";
 
-// ── Thread Service ───────────────────────────────────────────────────
-
 export { createThreadService } from "./thread-service.js";
 export type {
   SpawnThreadInput,
@@ -131,10 +124,14 @@ export type {
   ThreadServiceDeps,
 } from "./thread-service.js";
 
-// ── Orchestrator Service ─────────────────────────────────────────────
-
-export { createOrchestratorService, parseDelegations } from "./orchestrator-service.js";
+export {
+  createOrchestratorService,
+  parseDelegations,
+} from "./orchestrator-service.js";
 export type {
+  DelegationPolicy,
+  DelegationPlanEntry,
+  DelegationPlan,
   ThreadRunCard,
   OrchestratorResult,
   OrchestratorService,
