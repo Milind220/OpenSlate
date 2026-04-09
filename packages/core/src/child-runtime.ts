@@ -2,7 +2,11 @@
  * Child runtime loop — bounded execution for thread sessions.
  */
 
-import type { SessionId, MessagePart } from "./types/index.js";
+import type {
+  SessionId,
+  MessagePart,
+  ChildPromptEpisode,
+} from "./types/index.js";
 import type { MessageStore } from "./storage/message-store.js";
 import type { EventBus } from "./events.js";
 import { RuntimeEvents } from "./events.js";
@@ -11,7 +15,6 @@ import type {
   CompletionContractValidity,
   ToolCallSummary,
 } from "./types/worker-return.js";
-
 export interface ChildToolCall {
   id: string;
   name: string;
@@ -67,9 +70,9 @@ export interface ChildRuntimeConfig {
     string,
     { description: string; parameters: Record<string, unknown> }
   >;
+  inputEpisodes?: ChildPromptEpisode[];
   maxIterations?: number;
 }
-
 export interface ChildRuntimeDeps {
   messageStore: MessageStore;
   events: EventBus;
@@ -119,11 +122,11 @@ export async function runChildLoop(
     task,
     systemPrompt,
     tools,
+    inputEpisodes,
     maxIterations = 20,
   } = config;
   const { messageStore, events, modelCall, executeTool } = deps;
   const startedAtMs = Date.now();
-
   const runtimeToolCalls: ToolCallSummary[] = [];
   const runtimeFilesRead = new Set<string>();
   const runtimeFilesChanged = new Set<string>();
@@ -159,11 +162,11 @@ export async function runChildLoop(
     try {
       result = await modelCall({
         messages: modelMessages,
-        system: systemPrompt ?? buildChildSystemPrompt(task, tools),
+        system:
+          systemPrompt ?? buildChildSystemPrompt(task, tools, inputEpisodes),
         tools: tools && Object.keys(tools).length > 0 ? tools : undefined,
       });
-    } catch (err) {
-      const error = err instanceof Error ? err.message : String(err);
+    } catch (err) {      const error = err instanceof Error ? err.message : String(err);
       const errMsg = messageStore.append({
         sessionId: childSessionId,
         role: "assistant",
@@ -467,6 +470,7 @@ function buildChildSystemPrompt(
     string,
     { description: string; parameters: Record<string, unknown> }
   >,
+  inputEpisodes?: ChildPromptEpisode[],
 ): string {
   const toolNames = tools ? Object.keys(tools) : [];
   const toolList =
@@ -478,11 +482,16 @@ function buildChildSystemPrompt(
           )
           .join("\n")
       : "- No tools available";
+  const episodeContext = formatEpisodeContext(inputEpisodes ?? []);
+
   return [
     "You are a bounded child worker in the OpenSlate runtime.",
     "",
     "Task:",
     task,
+    "",
+    "Selected prior episodes (use as context, not as transcript):",
+    episodeContext,
     "",
     "Available tools:",
     toolList,
@@ -490,6 +499,7 @@ function buildChildSystemPrompt(
     "Execution rules:",
     "- Stay tightly scoped to the stated task. Do not branch into unrelated work.",
     "- Use tools only when needed for evidence or execution.",
+    "- Reuse prior episode findings where relevant and avoid repeating identical exploration.",
     "- Track what you read, what you changed, and key findings as you go.",
     "- If blocked, complete as much as possible and clearly note open questions.",
     "",
@@ -509,10 +519,38 @@ function buildChildSystemPrompt(
   ].join("\n");
 }
 
+function formatEpisodeContext(episodes: ChildPromptEpisode[]): string {
+  if (episodes.length === 0) {
+    return "- none";
+  }
+
+  return episodes
+    .map((episode, index) => {
+      const findings =
+        episode.keyFindings.length > 0
+          ? episode.keyFindings.slice(0, 4).join(" | ")
+          : "(none)";
+      const files =
+        episode.filesChanged.length > 0
+          ? episode.filesChanged.slice(0, 4).join(" | ")
+          : episode.filesRead.length > 0
+            ? episode.filesRead.slice(0, 4).join(" | ")
+            : "(none)";
+      return [
+        `- [${index + 1}] id=${episode.id}`,
+        `  alias=${episode.alias ?? "(none)"} status=${episode.status}`,
+        `  task=${episode.task}`,
+        `  summary=${episode.summary ?? "(none)"}`,
+        `  keyFindings=${findings}`,
+        `  files=${files}`,
+      ].join("\n");
+    })
+    .join("\n");
+}
+
 function parseStructuredReturn(text: string): ParsedStructuredReturn {
   if (!text || text.trim().length === 0) {
-    return {
-      structured: null,
+    return {      structured: null,
       completionContract: {
         validity: "missing",
         issues: ["Child response was empty; no worker_return block found."],
