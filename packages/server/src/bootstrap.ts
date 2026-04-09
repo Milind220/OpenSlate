@@ -9,6 +9,7 @@ import {
   createSessionStore,
   createMessageStore,
   createWorkerReturnStore,
+  createEpisodeStore,
   createEventBus,
   createSessionService,
   createModelCallAdapter,
@@ -47,7 +48,7 @@ export async function bootstrap(config: BootstrapConfig = {}) {
   const sessionStore = createSessionStore(db);
   const messageStore = createMessageStore(db);
   const workerReturnStore = createWorkerReturnStore(db);
-
+  const episodeStore = createEpisodeStore(db);
   // 2. Initialize event bus
   const events = createEventBus();
 
@@ -145,6 +146,7 @@ export async function bootstrap(config: BootstrapConfig = {}) {
     sessionStore,
     messageStore,
     workerReturnStore,
+    episodeStore,
     events,
     childModelCall,
     createToolExecutor: (capabilities: string[]) => {
@@ -192,6 +194,7 @@ export async function bootstrap(config: BootstrapConfig = {}) {
     orchestratorService,
     events,
     toolRegistry,
+    episodeStore,
     db,
   };
 }

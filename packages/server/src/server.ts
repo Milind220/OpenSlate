@@ -185,6 +185,7 @@ export function createServer(
           {
             childSession: result.childSession,
             workerReturn: result.workerReturn,
+            episode: result.episode,
             reused: result.reused,
           },
           201,
@@ -209,6 +210,23 @@ export function createServer(
         return json(returns);
       }
 
+      // GET /sessions/:id/episodes — list episodes for parent
+      const episodesMatch = path.match(/^\/sessions\/([^\/]+)\/episodes$/);
+      if (method === "GET" && episodesMatch) {
+        const parentSessionId = episodesMatch[1] as SessionId;
+        const episodes = threadService.listEpisodes(parentSessionId);
+        return json(episodes);
+      }
+
+      // GET /episodes/:id — get specific episode
+      const episodeMatch = path.match(/^\/episodes\/([^\/]+)$/);
+      if (method === "GET" && episodeMatch) {
+        const id = episodeMatch[1]!;
+        const episode = threadService.getEpisode(id);
+        if (!episode) return errorResponse("Episode not found", 404);
+        return json(episode);
+      }
+
       // GET /worker-returns/:id — get specific worker return
       const workerReturnMatch = path.match(/^\/worker-returns\/([^\/]+)$/);
       if (method === "GET" && workerReturnMatch) {
@@ -217,7 +235,6 @@ export function createServer(
         if (!wr) return errorResponse("WorkerReturn not found", 404);
         return json(wr);
       }
-
       // GET /config
       if (method === "GET" && path === "/config") {
         const config = deps.configService?.getConfig() ?? {

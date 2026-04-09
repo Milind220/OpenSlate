@@ -8,6 +8,7 @@ import type {
   SessionId,
   Message,
   WorkerReturn,
+  Episode,
   ThreadRunCard,
   DelegationPlan,
 } from "@openslate/core";
@@ -45,9 +46,9 @@ export interface OrchestrateResponse {
 export interface SpawnThreadResponse {
   childSession: Session;
   workerReturn: WorkerReturn;
+  episode: Episode;
   reused: boolean;
 }
-
 export interface AppConfig {
   providers: Record<
     string,
@@ -100,6 +101,12 @@ export interface OpenSlateClient {
 
   /** Get a specific worker return. */
   getWorkerReturn(id: string): Promise<WorkerReturn>;
+
+  /** List episodes for a parent session. */
+  listEpisodes(parentSessionId: SessionId): Promise<Episode[]>;
+
+  /** Get a specific episode. */
+  getEpisode(id: string): Promise<Episode>;
 
   /** Get app configuration. */
   getConfig(): Promise<AppConfig>;
@@ -197,6 +204,14 @@ export function createClient(config: OpenSlateClientConfig): OpenSlateClient {
 
     getWorkerReturn(id) {
       return request("/worker-returns/" + id);
+    },
+
+    listEpisodes(parentSessionId) {
+      return request("/sessions/" + parentSessionId + "/episodes");
+    },
+
+    getEpisode(id) {
+      return request("/episodes/" + id);
     },
 
     getConfig() {
