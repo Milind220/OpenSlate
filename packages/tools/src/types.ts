@@ -7,7 +7,17 @@
 
 // ── Capabilities ─────────────────────────────────────────────────────
 
-export type ToolCapability = "read" | "write" | "search" | "shell" | "git";
+export type ToolCapability =
+  | "read"      // File reading operations
+  | "write"     // File writing operations
+  | "edit"      // File editing operations
+  | "search"    // Content searching
+  | "shell"     // Shell command execution
+  | "web"       // Web fetching and searching
+  | "agent"     // Subagent spawning and task management
+  | "lsp"       // Language server protocol operations
+  | "skill"     // Skill loading
+  | "batch";    // Batch operations
 
 // ── Schemas & Activity Contracts ─────────────────────────────────────
 
@@ -81,4 +91,60 @@ export interface ToolRegistry {
   getToolSet(capabilities: ToolCapability[]): Record<string, { description: string; parameters: ToolSchema; returns: ToolSchema }>;
   /** Execute a tool call with permission checking. */
   execute(call: ToolCall, allowedCapabilities: ToolCapability[]): Promise<ToolResult>;
+}
+
+// ── Helper Types ─────────────────────────────────────────────────────
+
+export function requiredStringArg(args: Record<string, unknown>, key: string): string {
+  const value = args[key];
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`Invalid or missing '${key}' argument`);
+  }
+  return value;
+}
+
+export function optionalStringArg(args: Record<string, unknown>, key: string): string | undefined {
+  const value = args[key];
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+export function optionalNumberArg(args: Record<string, unknown>, key: string): number | undefined {
+  const value = args[key];
+  return typeof value === "number" ? value : undefined;
+}
+
+export function optionalBooleanArg(args: Record<string, unknown>, key: string): boolean | undefined {
+  const value = args[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
+// ── Activity Helpers ─────────────────────────────────────────────────
+
+export const activitySchema: ToolSchema = {
+  type: "object",
+  properties: {
+    type: { type: "string" },
+    summary: { type: "string" },
+    target: { type: "string" },
+    itemCount: { type: "number" },
+  },
+  required: ["type", "summary"],
+  additionalProperties: true,
+};
+
+export function returnsSchema(data: ToolSchema): ToolSchema {
+  return {
+    type: "object",
+    properties: {
+      content: { type: "string" },
+      data,
+      activity: activitySchema,
+    },
+    required: ["content"],
+    additionalProperties: false,
+  };
+}
+
+export function createActivity(type: string, summary: string, target?: string, itemCount?: number): ToolActivity {
+  return { type, summary, target, itemCount };
 }
