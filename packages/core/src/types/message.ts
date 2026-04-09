@@ -110,8 +110,13 @@ export interface DelegationPlanPart extends MessagePartBase {
   planId: string;
   policy: {
     maxThreadsPerTurn: number;
+    preferredThreadsPerTurn: number;
     childMaxIterations: number;
     defaultCapabilities: string[];
+    episodeSelection: {
+      maxForOrchestrator: number;
+      maxForChildPrompt: number;
+    };
   };
   entries: Array<{
     alias: string;
@@ -119,6 +124,7 @@ export interface DelegationPlanPart extends MessagePartBase {
     reason: string | null;
     expectedOutput: string | null;
     capabilities: string[];
+    inputEpisodeIds: string[];
   }>;
 }
 

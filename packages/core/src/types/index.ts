@@ -47,3 +47,11 @@ export type {
   CompletionContractSignal,
   WorkerReturn,
 } from "./worker-return.js";
+
+export type {
+  Episode,
+  EpisodeRuntimeData,
+  ChildPromptEpisode,
+  EpisodeSelectionPolicy,
+} from "./episode.js";
+export { DEFAULT_EPISODE_SELECTION_POLICY } from "./episode.js";

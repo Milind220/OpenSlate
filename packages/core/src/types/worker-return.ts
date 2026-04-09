@@ -1,8 +1,8 @@
 /**
- * WorkerReturn — the structured reintegration contract between parent and child sessions.
+ * WorkerReturn — completion marker for a bounded child run.
  *
- * Every bounded child run (thread or query) returns exactly one WorkerReturn to the parent.
- * The parent orchestrator consumes these by default, not raw child transcripts.
+ * WorkerReturn stays minimal by design and is kept separate from Episode.
+ * Episode is derived after WorkerReturn persistence and carries reusable semantics.
  */
 
 import type { SessionId, ArtifactId } from "./session.js";
@@ -33,28 +33,12 @@ export interface WorkerReturn {
   alias: string | null;
   task: string;
   status: WorkerReturnStatus;
-  /** Structured output from the child run. */
+  /** Structured output contract from the child run (opaque to parent until Episode derivation). */
   output: string | null;
   /** Reference to the child session trace for drill-down. */
   traceRef: string | null;
   /** References to artifacts produced by the child run. */
   artifactRefs: ArtifactId[];
-  summary?: string | null;
-  keyFindings?: string[];
-  filesRead?: string[];
-  filesChanged?: string[];
-  toolCalls?: ToolCallSummary[];
-  openQuestions?: string[];
-  nextActions?: string[];
-  completionContract?: CompletionContractSignal | null;
-  durationMs?: number | null;
-  model?: string | null;
-  tokenUsage?: {
-    promptTokens: number;
-    completionTokens: number;
-    totalTokens: number;
-  } | null;
-  estimatedCostUsd?: number | null;
   startedAt: string;
   finishedAt: string | null;
 }

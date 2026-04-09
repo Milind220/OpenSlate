@@ -109,6 +109,16 @@ export interface WorkerReturnCreatedEvent extends RuntimeEvent {
   };
 }
 
+export interface EpisodeCreatedEvent extends RuntimeEvent {
+  type: "episode.created";
+  payload: {
+    episodeId: string;
+    workerReturnId: string;
+    parentSessionId: string;
+    childSessionId: string;
+    status: string;
+  };
+}
 // ── Union ────────────────────────────────────────────────────────────
 
 export type OpenSlateEvent =
@@ -126,9 +136,9 @@ export type OpenSlateEvent =
   | ThreadToolStartedEvent
   | ThreadToolCompletedEvent
   | ThreadActivityEvent
-  | WorkerReturnCreatedEvent;
+  | WorkerReturnCreatedEvent
+  | EpisodeCreatedEvent;
 export type OpenSlateEventType = OpenSlateEvent["type"];
-
 // ── Event Bus ────────────────────────────────────────────────────────
 
 export type EventListener = (event: OpenSlateEvent) => void;
@@ -302,6 +312,21 @@ export const RuntimeEvents = {
     status: string,
   ): WorkerReturnCreatedEvent {
     return makeEvent<WorkerReturnCreatedEvent>("worker_return.created", {
+      workerReturnId,
+      parentSessionId,
+      childSessionId,
+      status,
+    });
+  },
+  episodeCreated(
+    episodeId: string,
+    workerReturnId: string,
+    parentSessionId: string,
+    childSessionId: string,
+    status: string,
+  ): EpisodeCreatedEvent {
+    return makeEvent<EpisodeCreatedEvent>("episode.created", {
+      episodeId,
       workerReturnId,
       parentSessionId,
       childSessionId,
