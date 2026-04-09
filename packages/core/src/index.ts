@@ -50,7 +50,12 @@ export type {
   CompletionContractValidity,
   CompletionContractSignal,
   WorkerReturn,
+  Episode,
+  EpisodeRuntimeData,
+  ChildPromptEpisode,
+  EpisodeSelectionPolicy,
 } from "./types/index.js";
+export { DEFAULT_EPISODE_SELECTION_POLICY } from "./types/index.js";
 
 export { initDatabase } from "./storage/index.js";
 export { createSessionStore } from "./storage/index.js";
@@ -62,6 +67,8 @@ export type {
   WorkerReturnStore,
   CreateWorkerReturnInput,
 } from "./storage/index.js";
+export { createEpisodeStore } from "./storage/index.js";
+export type { EpisodeStore, CreateEpisodeInput } from "./storage/index.js";
 
 export { createEventBus, RuntimeEvents } from "./events.js";
 export type {
@@ -81,6 +88,7 @@ export type {
   ThreadToolCompletedEvent,
   ThreadActivityEvent,
   WorkerReturnCreatedEvent,
+  EpisodeCreatedEvent,
   OpenSlateEvent,
   OpenSlateEventType,
   EventListener,
@@ -124,10 +132,7 @@ export type {
   ThreadServiceDeps,
 } from "./thread-service.js";
 
-export {
-  createOrchestratorService,
-  parseDelegations,
-} from "./orchestrator-service.js";
+export { createOrchestratorService } from "./orchestrator-service.js";
 export type {
   DelegationPolicy,
   DelegationPlanEntry,
