@@ -295,7 +295,16 @@ export interface SubagentCardData {
   } | null;
   estimatedCostUsd?: number | null;
   model?: string | null;
+  summary?: string | null;
+  completionContractValidity?: "valid" | "missing" | "malformed" | null;
   delegationReason?: string | null;
+  currentTool?: string | null;
+  keyFindings?: string[];
+  output?: string | null;
+  reused?: boolean;
+  iterations?: number;
+  capabilities?: string[];
+  inputEpisodeIds?: string[];
   liveActivity?: string;
 }
 function formatDuration(ms: number | null): string {
@@ -338,7 +347,6 @@ export function subagentCards(
     const alias = card.alias || "(unnamed)";
     const aliasStyled = theme.alias + alias + ansi.reset;
 
-    // Status indicator
     let statusIcon: string;
     if (card.liveActivity) {
       statusIcon = theme.warning + "⟳" + ansi.reset;
@@ -351,10 +359,15 @@ export function subagentCards(
     }
 
     const dur = formatDuration(card.durationMs);
-
-    // Line 1: ● alias  task  ✓ 1.2s
     const taskText = card.liveActivity || card.task;
-    const metaRight = statusIcon + " " + theme.textDim + dur + ansi.reset;
+    const metaRight =
+      statusIcon +
+      " " +
+      statusBadge(card.status) +
+      " " +
+      theme.textDim +
+      dur +
+      ansi.reset;
     const metaRightLen = stripAnsi(metaRight).length;
     const leftBudget = innerWidth - 4 - metaRightLen - 2;
     const aliasLen = stripAnsi(aliasStyled).length;
@@ -386,13 +399,16 @@ export function subagentCards(
         ansi.reset,
     );
 
-    // Line 2: stats - files read · tool calls · tokens · cost
     const stats = [
-      card.filesRead.length + card.filesChanged.length + " files",
-      card.toolCallCount + " tool calls",
-      card.tokenUsage ? card.tokenUsage.totalTokens + " tokens" : "tokens:—",
-      "cost " + formatCost(card.estimatedCostUsd),
-    ].join(" · ");
+      `${card.filesRead.length} read`,
+      `${card.filesChanged.length} changed`,
+      `${card.toolCallCount} tools`,
+      card.tokenUsage ? `${card.tokenUsage.totalTokens} tok` : "tok:—",
+      `cost ${formatCost(card.estimatedCostUsd)}`,
+      card.iterations != null ? `iter ${card.iterations}` : null,
+    ]
+      .filter((item): item is string => Boolean(item))
+      .join(" · ");
     const statsLine = "    " + theme.textDim + stats + ansi.reset;
     const statsLen = stripAnsi(statsLine).length;
     const statsPad = Math.max(0, innerWidth - 2 - statsLen);
@@ -408,10 +424,14 @@ export function subagentCards(
         ansi.reset,
     );
 
-    // Line 3: model + delegation reason (if available)
     const detailParts = [
+      card.currentTool ? `tool ${card.currentTool}` : null,
       card.model ? `model ${card.model}` : null,
-      card.delegationReason ? `reason ${card.delegationReason}` : null,
+      card.completionContractValidity
+        ? `completion ${card.completionContractValidity}`
+        : null,
+      card.reused ? "reused" : null,
+      card.delegationReason ? `why ${card.delegationReason}` : null,
     ].filter((x): x is string => Boolean(x));
 
     if (detailParts.length > 0) {
@@ -429,6 +449,40 @@ export function subagentCards(
           ansi.reset +
           detailText +
           " ".repeat(detailPad) +
+          theme.border +
+          " │" +
+          ansi.reset,
+      );
+    }
+
+    const summaryBits = [
+      card.summary ? `summary ${card.summary}` : null,
+      card.keyFindings && card.keyFindings.length > 0
+        ? `${card.keyFindings.length} findings`
+        : null,
+      card.capabilities && card.capabilities.length > 0
+        ? `caps ${card.capabilities.join(",")}`
+        : null,
+      card.inputEpisodeIds && card.inputEpisodeIds.length > 0
+        ? `${card.inputEpisodeIds.length} inputs`
+        : null,
+    ].filter((x): x is string => Boolean(x));
+
+    if (summaryBits.length > 0) {
+      const summaryText =
+        "    " +
+        theme.text +
+        truncate(summaryBits.join(" · "), innerWidth - 4) +
+        ansi.reset;
+      const summaryLen = stripAnsi(summaryText).length;
+      const summaryPad = Math.max(0, innerWidth - 2 - summaryLen);
+      lines.push(
+        "  " +
+          theme.border +
+          "│ " +
+          ansi.reset +
+          summaryText +
+          " ".repeat(summaryPad) +
           theme.border +
           " │" +
           ansi.reset,

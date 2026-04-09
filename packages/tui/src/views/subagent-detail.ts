@@ -11,6 +11,7 @@ import type {
   Message,
   MessagePart,
   WorkerReturn,
+  Episode,
 } from "@openslate/core";
 import type { App } from "../app.js";
 import {
@@ -85,13 +86,15 @@ export class SubagentDetailView {
     let childSession: Session | null = null;
     let childMessages: Message[] = [];
     let workerReturn: WorkerReturn | null = null;
+    let episode: Episode | null = null;
     let loadError: string | null = null;
 
     try {
-      const [children, messages, returns] = await Promise.all([
+      const [children, messages, returns, episodes] = await Promise.all([
         this.client.listChildren(this.sessionId),
         this.client.getChildMessages(this.sessionId, this.childSessionId),
         this.client.listWorkerReturns(this.sessionId),
+        this.client.listEpisodes(this.sessionId),
       ]);
 
       childSession = children.find((c) => c.id === this.childSessionId) || null;
@@ -105,6 +108,12 @@ export class SubagentDetailView {
             new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime(),
         );
       workerReturn = childReturns[0] || null;
+
+      if (workerReturn) {
+        episode =
+          episodes.find((item) => item.workerReturnId === workerReturn?.id) ??
+          null;
+      }
     } catch (e: any) {
       loadError = e?.message || String(e);
     }
@@ -114,6 +123,7 @@ export class SubagentDetailView {
       childSession,
       childMessages,
       workerReturn,
+      episode,
       loadError,
     );
 
@@ -131,9 +141,8 @@ export class SubagentDetailView {
         const idPrefix = this.childSessionId.slice(0, 8);
         const status = workerReturn?.status || childSession?.status || "active";
         const task = workerReturn?.task || childSession?.title || "(no task)";
-        const model = workerReturn?.model || "—";
-        const duration = formatDuration(workerReturn?.durationMs);
-
+        const model = episode?.runtime.model || "—";
+        const duration = formatDuration(episode?.runtime.durationMs);
         const headerLine1 =
           " " +
           theme.accentBold +
@@ -303,6 +312,7 @@ export class SubagentDetailView {
     childSession: Session | null,
     messages: Message[],
     workerReturn: WorkerReturn | null,
+    episode: Episode | null,
     loadError: string | null,
   ): string[] {
     const lines: string[] = [];
@@ -351,20 +361,20 @@ export class SubagentDetailView {
       );
       lines.push("");
 
-      // Summary
-      if (workerReturn.summary) {
+      const summary = episode?.summary ?? null;
+      if (summary) {
         lines.push(" " + theme.text + "Summary:" + ansi.reset);
-        const summaryLines = workerReturn.summary.split("\n");
+        const summaryLines = summary.split("\n");
         for (const sl of summaryLines) {
           lines.push("   " + theme.text + sl + ansi.reset);
         }
         lines.push("");
       }
 
-      // Key findings
-      if (workerReturn.keyFindings && workerReturn.keyFindings.length > 0) {
+      const keyFindings = episode?.keyFindings ?? [];
+      if (keyFindings.length > 0) {
         lines.push(" " + theme.text + "Key Findings:" + ansi.reset);
-        for (const finding of workerReturn.keyFindings) {
+        for (const finding of keyFindings) {
           lines.push(
             "   " +
               theme.info +
@@ -378,9 +388,8 @@ export class SubagentDetailView {
         lines.push("");
       }
 
-      // Files
-      const filesRead = workerReturn.filesRead || [];
-      const filesChanged = workerReturn.filesChanged || [];
+      const filesRead = episode?.filesRead ?? [];
+      const filesChanged = episode?.filesChanged ?? [];
       if (filesRead.length > 0 || filesChanged.length > 0) {
         lines.push(" " + theme.text + "Files:" + ansi.reset);
         for (const f of filesRead) {
@@ -392,8 +401,7 @@ export class SubagentDetailView {
         lines.push("");
       }
 
-      // Tool call count
-      const toolCallCount = workerReturn.toolCalls?.length ?? 0;
+      const toolCallCount = episode?.runtime.toolCalls.length ?? 0;
       lines.push(
         " " +
           theme.textDim +
@@ -407,7 +415,35 @@ export class SubagentDetailView {
           "Tokens: " +
           ansi.reset +
           theme.text +
-          formatTokenUsage(workerReturn.tokenUsage) +
+          formatTokenUsage(episode?.runtime.tokenUsage) +
+          ansi.reset,
+      );
+      lines.push(
+        " " +
+          theme.textDim +
+          "Model: " +
+          ansi.reset +
+          (episode?.runtime.model
+            ? theme.text + episode.runtime.model
+            : theme.textDim + "—") +
+          ansi.reset +
+          "    " +
+          theme.textDim +
+          "Cost: " +
+          ansi.reset +
+          theme.text +
+          (episode?.runtime.estimatedCostUsd != null
+            ? "$" + episode.runtime.estimatedCostUsd.toFixed(4)
+            : "—") +
+          ansi.reset,
+      );
+      lines.push(
+        " " +
+          theme.textDim +
+          "Completion contract: " +
+          ansi.reset +
+          theme.text +
+          (episode?.completionContract.validity ?? "—") +
           ansi.reset,
       );
       lines.push("");

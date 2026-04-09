@@ -32,6 +32,13 @@ function formatDuration(ms: number | null | undefined): string {
   return (ms / 1000).toFixed(1) + "s";
 }
 
+function durationFromReturn(ret: WorkerReturn | undefined): string {
+  if (!ret?.finishedAt) return "—";
+  const started = Date.parse(ret.startedAt);
+  const finished = Date.parse(ret.finishedAt);
+  if (!Number.isFinite(started) || !Number.isFinite(finished)) return "—";
+  return formatDuration(Math.max(0, finished - started));
+}
 export class SubagentPickerView {
   private client: OpenSlateClient;
   private sessionId: SessionId;
@@ -69,7 +76,7 @@ export class SubagentPickerView {
         alias: child.alias || "(unnamed)",
         status: ret?.status || child.status,
         task: ret?.task || child.title || "(no task)",
-        duration: formatDuration(ret?.durationMs),
+        duration: durationFromReturn(ret),
       };
     });
 

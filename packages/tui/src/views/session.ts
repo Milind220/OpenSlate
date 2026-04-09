@@ -11,11 +11,16 @@ import type {
   Message,
   MessagePart,
   WorkerReturn,
+  Episode,
   ThreadRunCard,
   OpenSlateEvent,
 } from "@openslate/core";
 import type { App } from "../app.js";
 import { SubagentPickerView } from "./subagent-picker.js";
+import {
+  rehydrateThreadRunsFromSessionData,
+  inferLastToolFromThreadRun,
+} from "./session-cards.js";
 import {
   ansi,
   theme,
@@ -60,7 +65,10 @@ type LiveCard = {
   } | null;
   estimatedCostUsd: number | null;
   model: string | null;
+  summary: string | null;
+  completionContractValidity: "valid" | "missing" | "malformed" | null;
   delegationReason: string | null;
+  currentTool: string | null;
   liveActivity?: string;
   startedAt: number;
 };
@@ -141,16 +149,46 @@ export class SessionView {
 
   private async loadInitialState(): Promise<void> {
     try {
-      this.session = await this.client.getSession(this.sessionId);
-      const messages = await this.client.getMessages(this.sessionId);
+      const [session, messages, workerReturns, children, episodes] =
+        await Promise.all([
+          this.client.getSession(this.sessionId),
+          this.client.getMessages(this.sessionId),
+          this.client.listWorkerReturns(this.sessionId),
+          this.client.listChildren(this.sessionId),
+          this.client.listEpisodes(this.sessionId),
+        ]);
 
+      this.session = session;
       this.transcript = [];
+
+      const rehydrated = rehydrateThreadRunsFromSessionData({
+        messages,
+        workerReturns,
+        episodes,
+        children,
+      });
+
       for (const message of messages) {
         if (message.role === "user") {
           this.transcript.push({ type: "user", message });
         } else if (message.role === "assistant") {
           this.transcript.push({ type: "assistant", message });
+          const cards = rehydrated.byAssistantMessageId.get(message.id);
+          if (cards && cards.length > 0) {
+            this.transcript.push({ type: "subagent-cards", threadRuns: cards });
+          }
         }
+      }
+
+      if (rehydrated.orphanThreadRuns.length > 0) {
+        this.transcript.push({
+          type: "status",
+          text: `Recovered ${rehydrated.orphanThreadRuns.length} prior subagent run${rehydrated.orphanThreadRuns.length === 1 ? "" : "s"} from persisted returns.`,
+        });
+        this.transcript.push({
+          type: "subagent-cards",
+          threadRuns: rehydrated.orphanThreadRuns,
+        });
       }
 
       this.statusLine = theme.info + "Ready." + ansi.reset;
@@ -162,7 +200,6 @@ export class SessionView {
         ansi.reset;
     }
   }
-
   // ── Render ────────────────────────────────────────────────────────
 
   private render(): void {
@@ -213,7 +250,10 @@ export class SessionView {
           tokenUsage: lc.tokenUsage,
           estimatedCostUsd: lc.estimatedCostUsd,
           model: lc.model,
+          summary: lc.summary,
+          completionContractValidity: lc.completionContractValidity,
           delegationReason: lc.delegationReason,
+          currentTool: lc.currentTool,
           liveActivity: lc.liveActivity,
         });
       }
@@ -451,7 +491,16 @@ export class SessionView {
       tokenUsage: run.tokenUsage,
       estimatedCostUsd: run.estimatedCostUsd,
       model: run.model,
+      summary: run.summary,
+      completionContractValidity: run.completionContractValidity,
       delegationReason: run.delegationReason,
+      currentTool: inferLastToolFromThreadRun(run),
+      keyFindings: run.keyFindings,
+      output: run.output,
+      reused: run.reused,
+      iterations: run.iterations,
+      capabilities: run.capabilities,
+      inputEpisodeIds: run.inputEpisodeIds,
     }));
     return subagentCards(cards, cols);
   }
@@ -686,7 +735,10 @@ export class SessionView {
         tokenUsage: null,
         estimatedCostUsd: null,
         model: null,
+        summary: null,
+        completionContractValidity: null,
         delegationReason: null,
+        currentTool: null,
         liveActivity:
           event.type === "thread.reused" ? "Reusing thread..." : "Starting...",
         startedAt: Date.now(),
@@ -705,8 +757,10 @@ export class SessionView {
       card.liveActivity = (p.activity as string) || "Working...";
     } else if (event.type === "thread.tool_started") {
       card.toolCallCount++;
+      card.currentTool = (p.toolName as string) || null;
       card.liveActivity = "Running " + (p.toolName as string) + "...";
     } else if (event.type === "thread.tool_completed") {
+      card.currentTool = null;
       card.liveActivity = "Finished " + (p.toolName as string);
     } else if (event.type === "thread.completed") {
       card.status = "completed";
@@ -720,6 +774,48 @@ export class SessionView {
       card.status = (p.status as string) || "completed";
       card.durationMs = Date.now() - card.startedAt;
       card.liveActivity = undefined;
+      const workerReturnId =
+        typeof p.workerReturnId === "string" ? p.workerReturnId : null;
+      if (workerReturnId) {
+        void this.refreshLiveCardFromPersistedData(card, workerReturnId);
+      }
+    }
+  }
+
+  private async refreshLiveCardFromPersistedData(
+    card: LiveCard,
+    workerReturnId: string,
+  ): Promise<void> {
+    try {
+      const workerReturn = await this.client.getWorkerReturn(workerReturnId);
+      const episodes = await this.client.listEpisodes(this.sessionId);
+      const episode = episodes.find(
+        (item) => item.workerReturnId === workerReturnId,
+      );
+      if (!episode) return;
+
+      card.alias = card.alias ?? workerReturn.alias ?? null;
+      card.task = card.task || workerReturn.task;
+      card.filesRead = episode.filesRead;
+      card.filesChanged = episode.filesChanged;
+      card.toolCallCount = episode.runtime.toolCalls.length;
+      card.tokenUsage = episode.runtime.tokenUsage;
+      card.estimatedCostUsd = episode.runtime.estimatedCostUsd;
+      card.model = episode.runtime.model;
+      card.summary = episode.summary;
+      card.completionContractValidity = episode.completionContract.validity;
+      card.currentTool =
+        episode.runtime.toolCalls.length > 0
+          ? (episode.runtime.toolCalls[episode.runtime.toolCalls.length - 1]
+              ?.tool ?? null)
+          : null;
+      card.durationMs = episode.runtime.durationMs ?? card.durationMs;
+
+      if (this.orchestrating && !this.suspended) {
+        this.render();
+      }
+    } catch {
+      // best-effort hydration only
     }
   }
 
@@ -895,23 +991,25 @@ export class SessionView {
         status: spawned.workerReturn.status,
         reused: spawned.reused,
         output: spawned.workerReturn.output,
-        summary: spawned.workerReturn.summary ?? null,
-        keyFindings: spawned.workerReturn.keyFindings ?? [],
-        filesRead: spawned.workerReturn.filesRead ?? [],
-        filesChanged: spawned.workerReturn.filesChanged ?? [],
-        toolCallCount: spawned.workerReturn.toolCalls?.length ?? 0,
-        durationMs: spawned.workerReturn.durationMs ?? null,
-        model: spawned.workerReturn.model ?? null,
-        tokenUsage: spawned.workerReturn.tokenUsage ?? null,
-        estimatedCostUsd: spawned.workerReturn.estimatedCostUsd ?? null,
-        completionContractValidity:
-          spawned.workerReturn.completionContract?.validity ?? null,
+        summary: spawned.episode.summary,
+        keyFindings: spawned.episode.keyFindings,
+        filesRead: spawned.episode.filesRead,
+        filesChanged: spawned.episode.filesChanged,
+        toolCallCount: spawned.episode.runtime.toolCalls.length,
+        durationMs: spawned.episode.runtime.durationMs,
+        model: spawned.episode.runtime.model,
+        tokenUsage: spawned.episode.runtime.tokenUsage,
+        estimatedCostUsd: spawned.episode.runtime.estimatedCostUsd,
+        completionContractValidity: spawned.episode.completionContract.validity,
         workerReturnId: spawned.workerReturn.id,
+        episodeId: spawned.episode.id,
+        inputEpisodeIds: spawned.episode.inputEpisodeIds,
         startedAt: spawned.workerReturn.startedAt,
         finishedAt: spawned.workerReturn.finishedAt,
         delegationReason: null,
         expectedOutput: null,
         capabilities: ["read", "search"],
+        iterations: spawned.episode.runtime.iterations,
       };
       this.transcript.push({ type: "subagent-cards", threadRuns: [card] });
       this.statusLine = theme.success + "Thread spawned." + ansi.reset;
@@ -952,14 +1050,14 @@ export class SessionView {
         return;
       }
 
-      const returns = await this.client.listWorkerReturns(this.sessionId);
-      const childMessages = await this.client.getChildMessages(
-        this.sessionId,
-        child.id,
-      );
+      const [returns, childMessages, episodes] = await Promise.all([
+        this.client.listWorkerReturns(this.sessionId),
+        this.client.getChildMessages(this.sessionId, child.id),
+        this.client.listEpisodes(this.sessionId),
+      ]);
       await this.showPanel(
         "inspect",
-        this.buildChildInspectLines(child, returns, childMessages),
+        this.buildChildInspectLines(child, returns, episodes, childMessages),
       );
     } catch (e: any) {
       this.statusLine =
@@ -1257,6 +1355,7 @@ export class SessionView {
   private buildChildInspectLines(
     child: Session,
     returns: WorkerReturn[],
+    episodes: Episode[],
     childMessages: Message[],
   ): string[] {
     const childReturns = returns
@@ -1266,6 +1365,9 @@ export class SessionView {
           new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime(),
       );
     const latest = childReturns[0];
+    const latestEpisode = latest
+      ? episodes.find((episode) => episode.workerReturnId === latest.id)
+      : undefined;
     const toolCalls = childMessages
       .flatMap((m) => m.parts)
       .filter(
@@ -1305,17 +1407,16 @@ export class SessionView {
         String(toolResults.length),
     ];
 
-    if (latest?.summary)
+    if (latestEpisode?.summary)
       lines.push(
         "",
         theme.text + "Summary:" + ansi.reset,
-        "  " + latest.summary,
+        "  " + latestEpisode.summary,
       );
-    if (latest?.keyFindings && latest.keyFindings.length > 0) {
+    if (latestEpisode?.keyFindings && latestEpisode.keyFindings.length > 0) {
       lines.push("", theme.text + "Key Findings:" + ansi.reset);
-      for (const f of latest.keyFindings) lines.push("  - " + f);
+      for (const f of latestEpisode.keyFindings) lines.push("  - " + f);
     }
-
     lines.push("", theme.text + "Worker Returns:" + ansi.reset);
     if (childReturns.length === 0) {
       lines.push(theme.textDim + "  (none)" + ansi.reset);
