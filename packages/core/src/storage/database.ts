@@ -85,7 +85,6 @@ export function initDatabase(dbPath: string = DEFAULT_DB_PATH): Database {
       output TEXT,
       trace_ref TEXT,
       artifact_refs_json TEXT NOT NULL DEFAULT '[]',
-      structured_json TEXT DEFAULT '{}',
       started_at TEXT NOT NULL,
       finished_at TEXT,
       FOREIGN KEY (parent_session_id) REFERENCES sessions(id),
@@ -93,6 +92,35 @@ export function initDatabase(dbPath: string = DEFAULT_DB_PATH): Database {
     )
   `);
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS episodes (
+      id TEXT PRIMARY KEY,
+      parent_session_id TEXT NOT NULL,
+      child_session_id TEXT NOT NULL,
+      worker_return_id TEXT NOT NULL,
+      child_type TEXT NOT NULL DEFAULT 'thread',
+      alias TEXT,
+      task TEXT NOT NULL,
+      status TEXT NOT NULL,
+      trace_ref TEXT,
+      artifact_refs_json TEXT NOT NULL DEFAULT '[]',
+      input_episode_ids_json TEXT NOT NULL DEFAULT '[]',
+      summary TEXT,
+      key_findings_json TEXT NOT NULL DEFAULT '[]',
+      files_read_json TEXT NOT NULL DEFAULT '[]',
+      files_changed_json TEXT NOT NULL DEFAULT '[]',
+      open_questions_json TEXT NOT NULL DEFAULT '[]',
+      next_actions_json TEXT NOT NULL DEFAULT '[]',
+      completion_contract_json TEXT NOT NULL,
+      runtime_json TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      finished_at TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (parent_session_id) REFERENCES sessions(id),
+      FOREIGN KEY (child_session_id) REFERENCES sessions(id),
+      FOREIGN KEY (worker_return_id) REFERENCES worker_returns(id)
+    )
+  `);
   db.run(`
     CREATE TABLE IF NOT EXISTS runtime_config (
       id TEXT PRIMARY KEY,
@@ -131,6 +159,15 @@ export function initDatabase(dbPath: string = DEFAULT_DB_PATH): Database {
   db.run(
     "CREATE INDEX IF NOT EXISTS idx_worker_returns_child ON worker_returns(child_session_id)",
   );
+  db.run(
+    "CREATE INDEX IF NOT EXISTS idx_episodes_parent ON episodes(parent_session_id, created_at)",
+  );
+  db.run(
+    "CREATE INDEX IF NOT EXISTS idx_episodes_child ON episodes(child_session_id, created_at)",
+  );
+  db.run(
+    "CREATE INDEX IF NOT EXISTS idx_episodes_worker_return ON episodes(worker_return_id)",
+  );
 
   // Migration: add columns if they don't exist (for existing DBs from Phase 3)
   try {
@@ -139,11 +176,5 @@ export function initDatabase(dbPath: string = DEFAULT_DB_PATH): Database {
   try {
     db.run("ALTER TABLE sessions ADD COLUMN capabilities_json TEXT");
   } catch {}
-  try {
-    db.run(
-      "ALTER TABLE worker_returns ADD COLUMN structured_json TEXT DEFAULT '{}'",
-    );
-  } catch {}
-
   return db;
 }
