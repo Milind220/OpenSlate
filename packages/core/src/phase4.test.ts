@@ -7,6 +7,7 @@ import { initDatabase } from "./storage/database.js";
 import { createSessionStore } from "./storage/session-store.js";
 import { createMessageStore } from "./storage/message-store.js";
 import { createWorkerReturnStore } from "./storage/worker-return-store.js";
+import { createEpisodeStore } from "./storage/episode-store.js";
 import { createEventBus, RuntimeEvents } from "./events.js";
 import { createThreadService } from "./thread-service.js";
 import { runChildLoop } from "./child-runtime.js";
@@ -14,6 +15,7 @@ import type { ChildModelCallFn, ChildToolCall, ChildToolResult, ToolExecutorFn }
 import type { SessionStore } from "./storage/session-store.js";
 import type { MessageStore } from "./storage/message-store.js";
 import type { WorkerReturnStore } from "./storage/worker-return-store.js";
+import type { EpisodeStore } from "./storage/episode-store.js";
 import type { EventBus, OpenSlateEvent } from "./events.js";
 import type { SessionId } from "./types/session.js";
 
@@ -23,6 +25,7 @@ let db: ReturnType<typeof initDatabase>;
 let sessionStore: SessionStore;
 let messageStore: MessageStore;
 let workerReturnStore: WorkerReturnStore;
+let episodeStore: EpisodeStore;
 let events: EventBus;
 let emittedEvents: OpenSlateEvent[];
 
@@ -31,6 +34,7 @@ beforeEach(() => {
   sessionStore = createSessionStore(db);
   messageStore = createMessageStore(db);
   workerReturnStore = createWorkerReturnStore(db);
+  episodeStore = createEpisodeStore(db);
   events = createEventBus();
   emittedEvents = [];
   events.on((e) => emittedEvents.push(e));
@@ -307,6 +311,7 @@ describe("ThreadService", () => {
       sessionStore,
       messageStore,
       workerReturnStore,
+      episodeStore,
       events,
       childModelCall: mockSimpleModel("Task complete. Found 3 files."),
       createToolExecutor: () => async (call: ChildToolCall) => ({

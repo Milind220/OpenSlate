@@ -3,11 +3,9 @@ import { initDatabase } from "./storage/database.js";
 import { createSessionStore } from "./storage/session-store.js";
 import { createMessageStore } from "./storage/message-store.js";
 import { createWorkerReturnStore } from "./storage/worker-return-store.js";
-import { createEventBus, RuntimeEvents } from "./events.js";
-import {
-  createOrchestratorService,
-  parseDelegations,
-} from "./orchestrator-service.js";
+import { createEpisodeStore } from "./storage/episode-store.js";
+import { createEventBus } from "./events.js";
+import { createOrchestratorService } from "./orchestrator-service.js";
 import { createThreadService } from "./thread-service.js";
 import type {
   ModelCallFn,
@@ -22,6 +20,7 @@ import type {
 import type { SessionStore } from "./storage/session-store.js";
 import type { MessageStore } from "./storage/message-store.js";
 import type { WorkerReturnStore } from "./storage/worker-return-store.js";
+import type { EpisodeStore } from "./storage/episode-store.js";
 import type { EventBus, OpenSlateEvent } from "./events.js";
 import type { SessionId } from "./types/session.js";
 import type { ChildToolCall } from "./child-runtime.js";
@@ -30,6 +29,7 @@ let db: ReturnType<typeof initDatabase>;
 let sessionStore: SessionStore;
 let messageStore: MessageStore;
 let workerReturnStore: WorkerReturnStore;
+let episodeStore: EpisodeStore;
 let events: EventBus;
 let emittedEvents: OpenSlateEvent[];
 
@@ -38,6 +38,7 @@ beforeEach(() => {
   sessionStore = createSessionStore(db);
   messageStore = createMessageStore(db);
   workerReturnStore = createWorkerReturnStore(db);
+  episodeStore = createEpisodeStore(db);
   events = createEventBus();
   emittedEvents = [];
   events.on((e) => emittedEvents.push(e));
@@ -50,32 +51,12 @@ function mockModelCallFn(response: string): ModelCallFn {
   });
 }
 
-function mockDelegatingModelCallFn(
-  phase1Text: string,
-  phase2Text: string,
-): ModelCallFn {
-  let callCount = 0;
-  return async (_input: ModelCallInput): Promise<ModelCallResult> => {
-    callCount++;
-    if (callCount === 1) {
-      return {
-        parts: [{ kind: "text", content: phase1Text }],
-        usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
-      };
-    }
-
-    return {
-      parts: [{ kind: "text", content: phase2Text }],
-      usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
-    };
-  };
-}
-
 function mockThreadService(): ThreadService {
   return createThreadService({
     sessionStore,
     messageStore,
     workerReturnStore,
+    episodeStore,
     events,
     childModelCall: async () => ({
       text: "Task complete.",
@@ -92,46 +73,48 @@ function mockThreadService(): ThreadService {
   });
 }
 
-describe("parseDelegations", () => {
-  test("correctly extracts delegate blocks from model output", () => {
-    const text = [
-      "Let me break this down.",
-      "```delegate",
-      '[{"alias":"code-reader","task":"Read the entry point"}]',
-      "```",
-      "I will report back.",
-    ].join("\n");
-
-    const parsed = parseDelegations(text);
-
-    expect(parsed.delegations).toHaveLength(1);
-    expect(parsed.delegations[0]?.alias).toBe("code-reader");
-    expect(parsed.delegations[0]?.task).toBe("Read the entry point");
-    expect(parsed.cleanText).not.toContain("```delegate");
+function createTestEpisode(args: {
+  parentSessionId: SessionId;
+  childSessionId: SessionId;
+  workerReturnId: string;
+  task: string;
+  alias?: string;
+  inputEpisodeIds?: string[];
+}) {
+  const now = new Date().toISOString();
+  return episodeStore.create({
+    parentSessionId: args.parentSessionId,
+    childSessionId: args.childSessionId,
+    workerReturnId: args.workerReturnId,
+    childType: "thread",
+    alias: args.alias ?? null,
+    task: args.task,
+    status: "completed",
+    inputEpisodeIds: args.inputEpisodeIds ?? [],
+    summary: "ok",
+    completionContract: {
+      validity: "valid",
+      issues: [],
+    },
+    runtime: {
+      iterations: 1,
+      structuredReturn: null,
+      completionContract: {
+        validity: "valid",
+        issues: [],
+      },
+      toolCalls: [],
+      filesRead: [],
+      filesChanged: [],
+      durationMs: 1,
+      model: null,
+      tokenUsage: null,
+      estimatedCostUsd: null,
+    },
+    startedAt: now,
+    finishedAt: now,
   });
-
-  test("returns empty for text with no delegate blocks", () => {
-    const text = "Hello world";
-    const parsed = parseDelegations(text);
-
-    expect(parsed.delegations).toEqual([]);
-    expect(parsed.cleanText).toBe(text);
-  });
-
-  test("handles malformed JSON gracefully", () => {
-    const text = ["Before", "```delegate", "{not valid}", "```", "After"].join(
-      "\n",
-    );
-
-    const parsed = parseDelegations(text);
-
-    expect(parsed.delegations).toEqual([]);
-    expect(parsed.cleanText).not.toContain("```delegate");
-    expect(parsed.cleanText).toContain("Before");
-    expect(parsed.cleanText).toContain("After");
-  });
-});
-
+}
 describe("OrchestratorService", () => {
   test("sendMessage with no delegation returns direct response", async () => {
     const parent = sessionStore.create({ kind: "primary" });
@@ -161,16 +144,13 @@ describe("OrchestratorService", () => {
 
   test("sendMessage with delegation spawns threads and synthesizes", async () => {
     const parent = sessionStore.create({ kind: "primary" });
-
-    const phase1 =
-      'Let me delegate.\n```delegate\n[{"alias":"reader","task":"read stuff"}]\n```';
-    const phase2 = "Here is the synthesis based on thread results.";
+    const synthesis = "Here is the synthesis based on thread results.";
 
     const orchestrator = createOrchestratorService({
       sessionStore,
       messageStore,
       events,
-      modelCall: mockDelegatingModelCallFn(phase1, phase2),
+      modelCall: mockModelCallFn(synthesis),
       threadService: mockThreadService(),
     });
 
@@ -181,45 +161,33 @@ describe("OrchestratorService", () => {
 
     expect(result.threadRuns).toHaveLength(1);
     expect(result.threadRuns[0]?.status).toBe("completed");
-    expect(result.threadRuns[0]?.alias).toBe("reader");
+    expect(result.threadRuns[0]?.alias).toBe("worker-1");
     expect(result.assistantMessage.parts[0]).toEqual({
       kind: "text",
-      content: phase2,
+      content: synthesis,
     });
   });
 
-  test("strips delegate blocks from final synthesis response", async () => {
+  test("delegation path persists an intermediate delegation plan message", async () => {
     const parent = sessionStore.create({ kind: "primary" });
-
-    const phase1 =
-      'Delegating\n```delegate\n[{"alias":"reader","task":"read stuff"}]\n```';
-    const phase2 = [
-      "Synthesizing from child output.",
-      "```delegate",
-      '[{"alias":"should-not-run","task":"ignore this"}]',
-      "```",
-    ].join("\n");
 
     const orchestrator = createOrchestratorService({
       sessionStore,
       messageStore,
       events,
-      modelCall: mockDelegatingModelCallFn(phase1, phase2),
+      modelCall: mockModelCallFn("Synthesizing from child output."),
       threadService: mockThreadService(),
     });
 
-    const result = await orchestrator.sendMessage(
-      parent.id,
-      "Do something complex",
-    );
+    await orchestrator.sendMessage(parent.id, "Do something complex");
 
-    expect(result.threadRuns).toHaveLength(1);
-    const finalText = (
-      result.assistantMessage.parts[0] as { kind: string; content: string }
-    ).content;
-    expect(finalText).toContain("Synthesizing from child output.");
-    expect(finalText).not.toContain("```delegate");
-    expect(finalText).not.toContain("should-not-run");
+    const persisted = messageStore.listBySession(parent.id);
+    expect(persisted).toHaveLength(3);
+    const intermediate = persisted[1];
+    expect(intermediate?.role).toBe("assistant");
+    expect(intermediate?.parts.some((part) => part.kind === "delegation_plan")).toBe(
+      true,
+    );
   });
 
   test("handles thread failure gracefully (non-fatal)", async () => {
@@ -238,17 +206,21 @@ describe("OrchestratorService", () => {
       getWorkerReturn(_id: string) {
         return null;
       },
+      listEpisodes(_parentSessionId: SessionId) {
+        return [];
+      },
+      getEpisode(_id: string) {
+        return null;
+      },
     };
 
-    const phase1 =
-      'Delegating\n```delegate\n[{"alias":"broken","task":"will fail"}]\n```';
     const phase2 = "Synthesis despite failure.";
 
     const orchestrator = createOrchestratorService({
       sessionStore,
       messageStore,
       events,
-      modelCall: mockDelegatingModelCallFn(phase1, phase2),
+      modelCall: mockModelCallFn(phase2),
       threadService: failingThreadService,
     });
 
@@ -266,24 +238,12 @@ describe("OrchestratorService", () => {
   test("alias reuse works through orchestrator path", async () => {
     const parent = sessionStore.create({ kind: "primary" });
 
-    let callCount = 0;
     const aliasReuseModel: ModelCallFn = async (
       _input: ModelCallInput,
-    ): Promise<ModelCallResult> => {
-      callCount++;
-      const isPhase1 = callCount % 2 === 1;
-      return {
-        parts: [
-          {
-            kind: "text",
-            content: isPhase1
-              ? 'Delegating\n```delegate\n[{"alias":"worker-a","task":"do work"}]\n```'
-              : "Synthesis complete.",
-          },
-        ],
-        usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
-      };
-    };
+    ): Promise<ModelCallResult> => ({
+      parts: [{ kind: "text", content: "Synthesis complete." }],
+      usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+    });
 
     const orchestrator = createOrchestratorService({
       sessionStore,
@@ -304,34 +264,13 @@ describe("OrchestratorService", () => {
     );
   });
 
-  test("bounds delegations to max child threads", async () => {
+  test("bounds delegations to preferred child threads", async () => {
     const parent = sessionStore.create({ kind: "primary" });
 
-    let phase = 0;
-    const model: ModelCallFn = async (): Promise<ModelCallResult> => {
-      phase += 1;
-      if (phase === 1) {
-        return {
-          parts: [
-            {
-              kind: "text",
-              content: [
-                "Delegating",
-                "```delegate",
-                '[{"alias":"one","task":"task one"},{"alias":"two","task":"task two"},{"alias":"three","task":"task three"}]',
-                "```",
-              ].join("\n"),
-            },
-          ],
-          usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
-        };
-      }
-
-      return {
-        parts: [{ kind: "text", content: "Done." }],
-        usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
-      };
-    };
+    const model: ModelCallFn = async (): Promise<ModelCallResult> => ({
+      parts: [{ kind: "text", content: "Done." }],
+      usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+    });
 
     const calls: SpawnThreadInput[] = [];
     const fakeThreadService: ThreadService = {
@@ -342,20 +281,34 @@ describe("OrchestratorService", () => {
           parentId: parent.id,
           alias: input.alias,
         });
+
+        const workerReturn = workerReturnStore.create({
+          parentSessionId: parent.id,
+          childSessionId: child.id,
+          childType: "thread",
+          alias: input.alias ?? null,
+          task: input.task,
+          status: "completed",
+          output: "ok",
+          startedAt: new Date().toISOString(),
+          finishedAt: new Date().toISOString(),
+        });
+
+        const episode = createTestEpisode({
+          parentSessionId: parent.id,
+          childSessionId: child.id,
+          workerReturnId: workerReturn.id,
+          task: input.task,
+          alias: input.alias,
+          inputEpisodeIds: input.inputEpisodeIds,
+        });
+
         return {
           childSession: child,
           reused: false,
-          workerReturn: workerReturnStore.create({
-            parentSessionId: parent.id,
-            childSessionId: child.id,
-            childType: "thread",
-            alias: input.alias ?? null,
-            task: input.task,
-            status: "completed",
-            output: "ok",
-            startedAt: new Date().toISOString(),
-            finishedAt: new Date().toISOString(),
-          }),
+          workerReturn,
+          episode,
+          inputEpisodeIds: input.inputEpisodeIds ?? [],
         };
       },
       listChildren(_parentSessionId: SessionId) {
@@ -365,6 +318,12 @@ describe("OrchestratorService", () => {
         return [];
       },
       getWorkerReturn(_id: string) {
+        return null;
+      },
+      listEpisodes(_parentSessionId: SessionId) {
+        return [];
+      },
+      getEpisode(_id: string) {
         return null;
       },
     };
@@ -377,12 +336,14 @@ describe("OrchestratorService", () => {
       threadService: fakeThreadService,
     });
 
-    const result = await orchestrator.sendMessage(parent.id, "Do a broad scan");
+    const result = await orchestrator.sendMessage(
+      parent.id,
+      "Inspect API and then update docs and also run tests",
+    );
 
-    expect(result.threadRuns).toHaveLength(3);
-    expect(calls).toHaveLength(3);
-    expect(calls[0]?.alias).toBe("one");
-    expect(calls[1]?.alias).toBe("two");
-    expect(calls[2]?.alias).toBe("three");
+    expect(result.threadRuns).toHaveLength(2);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.alias).toBeDefined();
+    expect(calls[1]?.alias).toBeDefined();
   });
 });
