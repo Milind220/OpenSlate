@@ -8,7 +8,15 @@ import type {
   ToolResult,
   RegisteredTool,
   ToolRegistry,
+  ToolExecutionOutput,
 } from "./types.js";
+
+function normalizeToolOutput(output: string | ToolExecutionOutput): ToolExecutionOutput {
+  if (typeof output === "string") {
+    return { content: output };
+  }
+  return output;
+}
 
 export function createToolRegistry(): ToolRegistry {
   const tools = new Map<string, RegisteredTool>();
@@ -29,21 +37,21 @@ export function createToolRegistry(): ToolRegistry {
     listForCapabilities(capabilities: ToolCapability[]): RegisteredTool[] {
       const capSet = new Set(capabilities);
       return Array.from(tools.values()).filter(
-        (t) => capSet.has(t.definition.capability)
+        (t) => capSet.has(t.definition.capability),
       );
     },
 
-    getToolSet(capabilities: ToolCapability[]): Record<string, { description: string; parameters: Record<string, unknown> }> {
-      const result: Record<string, { description: string; parameters: Record<string, unknown> }> = {};
+    getToolSet(capabilities: ToolCapability[]): Record<string, { description: string; parameters: Record<string, unknown>; returns: Record<string, unknown> }> {
+      const result: Record<string, { description: string; parameters: Record<string, unknown>; returns: Record<string, unknown> }> = {};
       for (const tool of this.listForCapabilities(capabilities)) {
         result[tool.definition.name] = {
           description: tool.definition.description,
           parameters: tool.definition.parameters,
+          returns: tool.definition.returns,
         };
       }
       return result;
     },
-
     async execute(call: ToolCall, allowedCapabilities: ToolCapability[]): Promise<ToolResult> {
       const start = Date.now();
       const tool = tools.get(call.name);
@@ -66,17 +74,24 @@ export function createToolRegistry(): ToolRegistry {
           content: `Error: tool "${call.name}" requires capability "${tool.definition.capability}" which is not allowed`,
           isError: true,
           durationMs: Date.now() - start,
+          activity: {
+            type: "capability_denied",
+            summary: `Denied ${call.name} (${tool.definition.capability} required)`,
+            target: call.name,
+          },
         };
       }
 
       try {
-        const content = await tool.execute(call.args);
+        const output = normalizeToolOutput(await tool.execute(call.args));
         return {
           toolCallId: call.id,
           toolName: call.name,
-          content,
+          content: output.content,
           isError: false,
           durationMs: Date.now() - start,
+          data: output.data,
+          activity: output.activity,
         };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -86,6 +101,11 @@ export function createToolRegistry(): ToolRegistry {
           content: `Error: ${message}`,
           isError: true,
           durationMs: Date.now() - start,
+          activity: {
+            type: "tool_error",
+            summary: `Failed ${call.name}: ${message}`,
+            target: call.name,
+          },
         };
       }
     },
